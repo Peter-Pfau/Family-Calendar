@@ -47,12 +47,22 @@ try {
         redisClient.on('connect', () => console.log('✅ Redis connected'));
         redisClient.on('ready', () => console.log('✅ Redis ready'));
 
-        // Connect immediately and wait (critical for session persistence)
-        const connectPromise = redisClient.connect();
+        // Connect Redis client (required before creating store)
+        // Use IIFE to connect without blocking module load
+        (async () => {
+            try {
+                await redisClient.connect();
+                console.log('✅ Redis connection established');
+            } catch (err) {
+                console.error('❌ Redis connection failed:', err);
+            }
+        })();
 
         const store = new RedisStore({
             client: redisClient,
-            ttl: 7 * 24 * 60 * 60 // 7 days in seconds
+            ttl: 7 * 24 * 60 * 60, // 7 days in seconds
+            disableTouch: false,
+            disableTTL: false
         });
 
         app.use(session({
@@ -64,15 +74,10 @@ try {
                 secure: true, // Always true for HTTPS (Vercel always uses HTTPS)
                 httpOnly: true,
                 maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-                sameSite: 'lax' // Changed from 'none' - same-site works better for same-domain
+                sameSite: 'lax', // Changed from 'none' - same-site works better for same-domain
+                path: '/'
             }
         }));
-
-        // Wait for Redis to connect in background (don't block module load)
-        connectPromise.catch(err => {
-            console.error('Redis connection error:', err);
-            console.error('Redis connection failed - sessions may not persist');
-        });
 
         console.log('✅ Session middleware configured with Redis');
         sessionConfigured = true;
