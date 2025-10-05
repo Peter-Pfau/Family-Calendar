@@ -23,6 +23,8 @@ app.use(express.json());
 // Session configuration - Set up immediately for serverless
 let sessionConfigured = false;
 let redisClient = null;
+let isRedisConnected = false;
+let connectionPromise = null;
 
 try {
     if (REDIS_URL) {
@@ -40,24 +42,33 @@ try {
                 reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
                 tls: REDIS_URL.startsWith('rediss://'),
                 rejectUnauthorized: false // Accept self-signed certificates (Upstash)
-            },
-            lazyConnect: true // Don't connect immediately
+            }
         });
 
         redisClient.on('error', (err) => console.error('Redis Client Error', err));
-        redisClient.on('connect', () => console.log('✅ Redis connected'));
+        redisClient.on('connect', () => {
+            isRedisConnected = true;
+            console.log('✅ Redis connected');
+        });
         redisClient.on('ready', () => console.log('✅ Redis ready'));
+
+        // Connect Redis immediately
+        connectionPromise = redisClient.connect()
+            .then(() => {
+                isRedisConnected = true;
+                console.log('✅ Redis connection established');
+                return true;
+            })
+            .catch(err => {
+                console.error('❌ Redis connection failed:', err);
+                return false;
+            });
 
         const store = new RedisStore({
             client: redisClient,
             ttl: 7 * 24 * 60 * 60, // 7 days in seconds
             disableTouch: false,
             disableTTL: false
-        });
-
-        // Connect Redis after store is created
-        redisClient.connect().catch(err => {
-            console.error('❌ Redis connection failed:', err);
         });
 
         app.use(session({
@@ -123,6 +134,21 @@ try {
 if (!SESSION_SECRET || SESSION_SECRET === 'family-calendar-secret-change-in-production') {
     console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
 }
+
+// Middleware to ensure Redis is connected before processing requests
+app.use(async (req, res, next) => {
+    // If using Redis and not connected yet, wait for connection
+    if (REDIS_URL && connectionPromise && !isRedisConnected) {
+        console.log('⏳ Waiting for Redis connection...');
+        try {
+            await connectionPromise;
+            console.log('✅ Redis ready for request');
+        } catch (err) {
+            console.error('⚠️ Redis connection wait failed:', err);
+        }
+    }
+    next();
+});
 
 // Debug middleware - log all requests with session info
 app.use((req, res, next) => {
