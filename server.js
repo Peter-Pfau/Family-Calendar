@@ -40,29 +40,24 @@ try {
                 reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
                 tls: REDIS_URL.startsWith('rediss://'),
                 rejectUnauthorized: false // Accept self-signed certificates (Upstash)
-            }
+            },
+            lazyConnect: true // Don't connect immediately
         });
 
         redisClient.on('error', (err) => console.error('Redis Client Error', err));
         redisClient.on('connect', () => console.log('✅ Redis connected'));
         redisClient.on('ready', () => console.log('✅ Redis ready'));
 
-        // Connect Redis client (required before creating store)
-        // Use IIFE to connect without blocking module load
-        (async () => {
-            try {
-                await redisClient.connect();
-                console.log('✅ Redis connection established');
-            } catch (err) {
-                console.error('❌ Redis connection failed:', err);
-            }
-        })();
-
         const store = new RedisStore({
             client: redisClient,
             ttl: 7 * 24 * 60 * 60, // 7 days in seconds
             disableTouch: false,
             disableTTL: false
+        });
+
+        // Connect Redis after store is created
+        redisClient.connect().catch(err => {
+            console.error('❌ Redis connection failed:', err);
         });
 
         app.use(session({
@@ -128,6 +123,17 @@ try {
 if (!SESSION_SECRET || SESSION_SECRET === 'family-calendar-secret-change-in-production') {
     console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
 }
+
+// Debug middleware - log all requests with session info
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.path}`, {
+        hasSession: !!req.session,
+        sessionID: req.sessionID,
+        userId: req.session?.userId,
+        hasCookie: !!req.headers.cookie
+    });
+    next();
+});
 
 // Don't initialize yet - will do it before server starts
 app.use(express.static(path.join(__dirname)));
