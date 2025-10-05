@@ -1,21 +1,95 @@
 const express = require('express');
 const cors = require('cors');
+const session = require('express-session');
 const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
+const db = require('./database');
+const { requireAuth, requireRole } = require('./auth-middleware');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const EVENTS_FILE = path.join(__dirname, 'data', 'events.json');
+const SESSION_SECRET = process.env.SESSION_SECRET || 'family-calendar-secret-change-in-production';
+const REDIS_URL = process.env.REDIS_URL || process.env.KV_URL; // Support both Upstash and Vercel KV
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.VERCEL;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
 app.use(express.json());
+
+// Session configuration - Set up immediately for serverless
+if (REDIS_URL) {
+    // Production: Use Redis (Vercel, Upstash, etc.)
+    console.log('🔴 Setting up Redis session store');
+    const RedisStore = require('connect-redis').default;
+    const { createClient } = require('redis');
+
+    const redisClient = createClient({
+        url: REDIS_URL,
+        socket: {
+            reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
+            tls: REDIS_URL.startsWith('rediss://'),
+            rejectUnauthorized: false // Accept self-signed certificates (Upstash)
+        }
+    });
+
+    redisClient.on('error', (err) => console.error('Redis Client Error', err));
+    redisClient.on('connect', () => console.log('✅ Redis connected'));
+
+    // Connect asynchronously but don't block
+    redisClient.connect().catch(err => console.error('Redis connection error:', err));
+
+    const store = new RedisStore({ client: redisClient });
+
+    app.use(session({
+        store: store,
+        secret: SESSION_SECRET,
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+            secure: IS_PRODUCTION,
+            httpOnly: true,
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            sameSite: IS_PRODUCTION ? 'none' : 'lax'
+        }
+    }));
+} else {
+    // Development: Use SQLite
+    console.log('💾 Setting up SQLite session store');
+    const SQLiteStore = require('connect-sqlite3')(session);
+    const store = new SQLiteStore({
+        db: 'sessions.db',
+        dir: './data'
+    });
+
+    app.use(session({
+        store: store,
+        secret: SESSION_SECRET,
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+            secure: false,
+            httpOnly: true,
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            sameSite: 'lax'
+        }
+    }));
+}
+
+if (!SESSION_SECRET || SESSION_SECRET === 'family-calendar-secret-change-in-production') {
+    console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
+}
+
+// Don't initialize yet - will do it before server starts
 app.use(express.static(path.join(__dirname)));
 
 // Configure multer for file uploads
+// Use /tmp on Vercel (only writable directory), uploads/ locally
 const upload = multer({
-    dest: 'uploads/',
+    dest: IS_PRODUCTION ? '/tmp' : 'uploads/',
     fileFilter: (req, file, cb) => {
         const allowedTypes = ['.ics', '.csv'];
         const ext = path.extname(file.originalname).toLowerCase();
@@ -23,8 +97,13 @@ const upload = multer({
     }
 });
 
-// Ensure data directory exists
+// Ensure data directory exists (for local development only - not needed in production)
 async function ensureDataDir() {
+    // Skip in production (Vercel) - we use Postgres, not file storage
+    if (IS_PRODUCTION) {
+        return;
+    }
+
     try {
         await fs.access(path.join(__dirname, 'data'));
     } catch {
@@ -32,100 +111,324 @@ async function ensureDataDir() {
     }
 }
 
-// Load events from file
-async function loadEvents() {
+// Authentication API Routes
+
+// Initialize database (admin endpoint)
+app.get('/api/init-db', async (req, res) => {
     try {
-        const data = await fs.readFile(EVENTS_FILE, 'utf8');
-        return JSON.parse(data);
+        console.log('Manual DB initialization requested...');
+        await db.initializeDB();
+        res.json({ success: true, message: 'Database initialized successfully' });
     } catch (error) {
-        // If file doesn't exist, return empty array
-        return [];
+        console.error('DB init error:', error);
+        res.status(500).json({ error: error.message, stack: error.stack });
     }
-}
+});
 
-// Save events to file
-async function saveEvents(events) {
-    await ensureDataDir();
-    await fs.writeFile(EVENTS_FILE, JSON.stringify(events, null, 2));
+// Register new user (first user creates family)
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { email, password, name } = req.body;
 
-    // Also save to monthly files
-    await saveEventsToMonthlyFiles(events);
-}
-
-// Save events to monthly JSON files
-async function saveEventsToMonthlyFiles(events) {
-    const monthlyEvents = {};
-
-    // Group events by year-month
-    events.forEach(event => {
-        if (event.date) {
-            const date = new Date(event.date);
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const monthKey = `${year}-${month}`;
-
-            if (!monthlyEvents[monthKey]) {
-                monthlyEvents[monthKey] = [];
-            }
-            monthlyEvents[monthKey].push(event);
+        if (!email || !password || !name) {
+            return res.status(400).json({ error: 'Email, password, and name are required' });
         }
+
+        // Check if this is the first user (family creator)
+        const existingUser = await db.getUserByEmail(email);
+        if (existingUser) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
+
+        // Create family for first user
+        const family = await db.createFamily({
+            name: `${name}'s Family`,
+            createdBy: email
+        });
+
+        // Create user with admin role (first user is admin)
+        const user = await db.createUser({
+            email,
+            password,
+            name,
+            role: 'admin',
+            familyId: family.id
+        });
+
+        // Set session (if available)
+        if (req.session) {
+            req.session.userId = user.id;
+            req.session.userRole = user.role;
+            req.session.familyId = user.familyId;
+
+            // Explicitly save session before responding
+            await new Promise((resolve, reject) => {
+                req.session.save((err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+        }
+
+        res.status(201).json({ user, family });
+    } catch (error) {
+        console.error('Registration error:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error code:', error.code);
+        res.status(500).json({
+            error: error.message || 'Registration failed',
+            code: error.code
+        });
+    }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
+        const user = await db.verifyPassword(email, password);
+
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+
+        // Set session (if available)
+        if (req.session) {
+            req.session.userId = user.id;
+            req.session.userRole = user.role;
+            req.session.familyId = user.familyId || user.family_id;
+
+            // Explicitly save session before responding
+            await new Promise((resolve, reject) => {
+                req.session.save((err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+        } else {
+            console.warn('⚠️  Session not available during login');
+        }
+
+        const family = await db.getFamilyById(user.familyId || user.family_id);
+
+        res.json({ user, family });
+    } catch (error) {
+        console.error('Login error:', error);
+        console.error('Error details:', error.message);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ error: 'Login failed', details: error.message });
+    }
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({ error: 'Logout failed' });
+        }
+        res.json({ message: 'Logged out successfully' });
     });
+});
 
-    // Save each month's events to separate files
-    for (const [monthKey, monthEvents] of Object.entries(monthlyEvents)) {
-        const monthFile = path.join(__dirname, 'data', `${monthKey}.json`);
-        await fs.writeFile(monthFile, JSON.stringify(monthEvents, null, 2));
-    }
-}
-
-// Load events from a specific month
-async function loadEventsFromMonth(year, month) {
+// Get current user
+app.get('/api/auth/me', requireAuth, async (req, res) => {
     try {
-        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-        const monthFile = path.join(__dirname, 'data', `${monthKey}.json`);
-        const data = await fs.readFile(monthFile, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        // If file doesn't exist, return empty array
-        return [];
-    }
-}
-
-// Load all events from monthly files
-async function loadAllEventsFromMonthlyFiles() {
-    try {
-        const dataDir = path.join(__dirname, 'data');
-        await ensureDataDir();
-        const files = await fs.readdir(dataDir);
-        const monthlyFiles = files.filter(file => /^\d{4}-\d{2}\.json$/.test(file));
-
-        let allEvents = [];
-        for (const file of monthlyFiles) {
-            try {
-                const filePath = path.join(dataDir, file);
-                const data = await fs.readFile(filePath, 'utf8');
-                const monthEvents = JSON.parse(data);
-                if (Array.isArray(monthEvents)) {
-                    allEvents = allEvents.concat(monthEvents);
-                }
-            } catch (fileError) {
-                console.error(`Error reading file ${file}:`, fileError);
-            }
+        const user = await db.getUserById(req.session.userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
         }
 
-        return allEvents;
+        const { password, ...userWithoutPassword } = user;
+        const family = await db.getFamilyById(user.familyId);
+
+        res.json({ user: userWithoutPassword, family });
     } catch (error) {
-        console.error('Error loading monthly files:', error);
-        return [];
+        console.error('Get user error:', error);
+        res.status(500).json({ error: 'Failed to get user' });
     }
-}
+});
 
-// API Routes
+// Family Management Routes
 
-// Get all events
-app.get('/api/events', async (req, res) => {
+// Get family members
+app.get('/api/family/members', requireAuth, async (req, res) => {
     try {
-        const events = await loadEvents();
+        const members = await db.getFamilyMembers(req.session.familyId);
+        res.json(members);
+    } catch (error) {
+        console.error('Get family members error:', error);
+        res.status(500).json({ error: 'Failed to get family members' });
+    }
+});
+
+// Invite family member (admin only)
+app.post('/api/family/invite', requireRole('admin'), async (req, res) => {
+    try {
+        const { email, role } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required' });
+        }
+
+        // Check if user already exists
+        const existingUser = await db.getUserByEmail(email);
+        if (existingUser) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
+
+        const invitation = await db.createInvitation({
+            email,
+            familyId: req.session.familyId,
+            invitedBy: req.session.userId,
+            role: role || 'adult'
+        });
+
+        res.status(201).json(invitation);
+    } catch (error) {
+        console.error('Invitation error:', error);
+        res.status(500).json({ error: error.message || 'Failed to create invitation' });
+    }
+});
+
+// Get pending invitations for current family (admin only)
+app.get('/api/family/invitations', requireRole('admin'), async (req, res) => {
+    try {
+        const invitations = await db.getFamilyInvitations(req.session.familyId);
+        res.json(invitations);
+    } catch (error) {
+        console.error('Get invitations error:', error);
+        res.status(500).json({ error: 'Failed to get invitations' });
+    }
+});
+
+// Get invitations for email (for registration page)
+app.get('/api/invitations/:email', async (req, res) => {
+    try {
+        const invitations = await db.getInvitationsByEmail(req.params.email);
+        res.json(invitations);
+    } catch (error) {
+        console.error('Get invitations error:', error);
+        res.status(500).json({ error: 'Failed to get invitations' });
+    }
+});
+
+// Accept invitation and register
+app.post('/api/invitations/:id/accept', async (req, res) => {
+    try {
+        const { password, name } = req.body;
+        const invitationId = req.params.id;
+
+        if (!password || !name) {
+            return res.status(400).json({ error: 'Name and password are required' });
+        }
+
+        const invitation = await db.getInvitationById(invitationId);
+
+        if (!invitation) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        if (invitation.status !== 'pending') {
+            return res.status(400).json({ error: 'Invitation already processed' });
+        }
+
+        // Check if invitation has expired
+        if (new Date(invitation.expiresAt) < new Date()) {
+            return res.status(400).json({ error: 'Invitation has expired' });
+        }
+
+        // Create user
+        const user = await db.createUser({
+            email: invitation.email,
+            password,
+            name,
+            role: invitation.role,
+            familyId: invitation.familyId
+        });
+
+        // Update invitation status
+        await db.updateInvitationStatus(invitationId, 'accepted');
+
+        // Set session
+        req.session.userId = user.id;
+        req.session.userRole = user.role;
+        req.session.familyId = user.familyId;
+
+        const family = await db.getFamilyById(user.familyId);
+
+        res.status(201).json({ user, family });
+    } catch (error) {
+        console.error('Accept invitation error:', error);
+        res.status(500).json({ error: error.message || 'Failed to accept invitation' });
+    }
+});
+
+// Update user role (admin only)
+app.put('/api/family/members/:id/role', requireRole('admin'), async (req, res) => {
+    try {
+        const { role } = req.body;
+        const userId = req.params.id;
+
+        if (!['admin', 'adult', 'child'].includes(role)) {
+            return res.status(400).json({ error: 'Invalid role' });
+        }
+
+        const user = await db.getUserById(userId);
+
+        if (!user || user.familyId !== req.session.familyId) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Don't allow changing own role
+        if (userId === req.session.userId) {
+            return res.status(400).json({ error: 'Cannot change your own role' });
+        }
+
+        const updatedUser = await db.updateUser(userId, { role });
+
+        res.json(updatedUser);
+    } catch (error) {
+        console.error('Update role error:', error);
+        res.status(500).json({ error: 'Failed to update role' });
+    }
+});
+
+// Remove family member (admin only)
+app.delete('/api/family/members/:id', requireRole('admin'), async (req, res) => {
+    try {
+        const userId = req.params.id;
+
+        const user = await db.getUserById(userId);
+
+        if (!user || user.familyId !== req.session.familyId) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Don't allow deleting own account
+        if (userId === req.session.userId) {
+            return res.status(400).json({ error: 'Cannot delete your own account' });
+        }
+
+        await db.deleteUser(userId);
+
+        res.json({ message: 'User removed successfully' });
+    } catch (error) {
+        console.error('Delete user error:', error);
+        res.status(500).json({ error: 'Failed to remove user' });
+    }
+});
+
+// Event API Routes (Protected)
+
+// Get all events for family
+app.get('/api/events', requireAuth, async (req, res) => {
+    try {
+        const events = await db.getEventsByFamily(req.session.familyId, req.session.userId);
         res.json(events);
     } catch (error) {
         console.error('Error loading events:', error);
@@ -134,10 +437,10 @@ app.get('/api/events', async (req, res) => {
 });
 
 // Get events for a specific month
-app.get('/api/events/:year/:month', async (req, res) => {
+app.get('/api/events/:year/:month', requireAuth, async (req, res) => {
     try {
         const { year, month } = req.params;
-        const events = await loadEventsFromMonth(parseInt(year), parseInt(month));
+        const events = await db.getEventsByMonth(parseInt(year), parseInt(month), req.session.familyId, req.session.userId);
         res.json(events);
     } catch (error) {
         console.error('Error loading monthly events:', error);
@@ -145,31 +448,26 @@ app.get('/api/events/:year/:month', async (req, res) => {
     }
 });
 
-// Load events from monthly files (alternative to main events.json)
-app.get('/api/events/monthly/all', async (req, res) => {
+// Load all events (legacy endpoint for backward compatibility)
+app.get('/api/events/monthly/all', requireAuth, async (req, res) => {
     try {
-        console.log('Loading all events from monthly files...');
-        const events = await loadAllEventsFromMonthlyFiles();
-        console.log('Loaded events:', events.length);
+        const events = await db.getEventsByFamily(req.session.familyId, req.session.userId);
         res.json(events);
     } catch (error) {
-        console.error('Error loading events from monthly files:', error);
-        res.status(500).json({ error: 'Failed to load events from monthly files' });
+        console.error('Error loading events:', error);
+        res.status(500).json({ error: 'Failed to load events' });
     }
 });
 
 // Add new event
-app.post('/api/events', async (req, res) => {
+app.post('/api/events', requireAuth, async (req, res) => {
     try {
-        const events = await loadEvents();
-        const newEvent = {
-            id: 'event_' + Math.random().toString(36).substring(2) + Date.now().toString(36),
+        const newEvent = await db.createEvent({
             ...req.body,
-            createdAt: new Date().toISOString()
-        };
-        
-        events.push(newEvent);
-        await saveEvents(events);
+            ownerId: req.session.userId,
+            familyId: req.session.familyId,
+            visibility: req.body.visibility || 'shared'
+        });
         res.status(201).json(newEvent);
     } catch (error) {
         console.error('Error adding event:', error);
@@ -178,23 +476,29 @@ app.post('/api/events', async (req, res) => {
 });
 
 // Update event
-app.put('/api/events/:id', async (req, res) => {
+app.put('/api/events/:id', requireAuth, async (req, res) => {
     try {
-        const events = await loadEvents();
-        const eventIndex = events.findIndex(e => e.id === req.params.id);
-        
-        if (eventIndex === -1) {
+        const event = await db.getEventById(req.params.id);
+
+        if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
-        
-        events[eventIndex] = {
-            ...events[eventIndex],
-            ...req.body,
-            updatedAt: new Date().toISOString()
-        };
-        
-        await saveEvents(events);
-        res.json(events[eventIndex]);
+
+        // Authorization: only owner or admin can edit
+        if (event.owner_id !== req.session.userId && req.session.userRole !== 'admin') {
+            return res.status(403).json({ error: 'Not authorized to edit this event' });
+        }
+
+        // Children cannot change visibility or owner
+        const updates = { ...req.body };
+        if (req.session.userRole === 'child') {
+            delete updates.visibility;
+            delete updates.ownerId;
+            delete updates.familyId;
+        }
+
+        const updatedEvent = await db.updateEvent(req.params.id, updates);
+        res.json(updatedEvent);
     } catch (error) {
         console.error('Error updating event:', error);
         res.status(500).json({ error: 'Failed to update event' });
@@ -202,17 +506,20 @@ app.put('/api/events/:id', async (req, res) => {
 });
 
 // Delete event
-app.delete('/api/events/:id', async (req, res) => {
+app.delete('/api/events/:id', requireAuth, async (req, res) => {
     try {
-        const events = await loadEvents();
-        const eventIndex = events.findIndex(e => e.id === req.params.id);
-        
-        if (eventIndex === -1) {
+        const event = await db.getEventById(req.params.id);
+
+        if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
-        
-        const deletedEvent = events.splice(eventIndex, 1)[0];
-        await saveEvents(events);
+
+        // Authorization: only owner or admin can delete
+        if (event.owner_id !== req.session.userId && req.session.userRole !== 'admin') {
+            return res.status(403).json({ error: 'Not authorized to delete this event' });
+        }
+
+        const deletedEvent = await db.deleteEvent(req.params.id);
         res.json(deletedEvent);
     } catch (error) {
         console.error('Error deleting event:', error);
@@ -221,34 +528,40 @@ app.delete('/api/events/:id', async (req, res) => {
 });
 
 // Upload and parse calendar file
-app.post('/api/import', upload.single('calendarFile'), async (req, res) => {
+app.post('/api/import', requireAuth, upload.single('calendarFile'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
-        
+
         const filePath = req.file.path;
         const fileContent = await fs.readFile(filePath, 'utf8');
-        const events = await loadEvents();
-        
+
         let importedEvents = [];
-        
+
         if (req.file.originalname.endsWith('.ics')) {
             importedEvents = parseICSFile(fileContent);
         } else if (req.file.originalname.endsWith('.csv')) {
             importedEvents = parseCSVFile(fileContent);
         }
-        
-        // Add imported events to existing events
-        events.push(...importedEvents);
-        await saveEvents(events);
-        
+
+        // Add owner and family info to imported events
+        importedEvents = importedEvents.map(event => ({
+            ...event,
+            ownerId: req.session.userId,
+            familyId: req.session.familyId,
+            visibility: 'shared'
+        }));
+
+        // Bulk create events in database
+        await db.bulkCreateEvents(importedEvents);
+
         // Clean up uploaded file
         await fs.unlink(filePath);
-        
-        res.json({ 
+
+        res.json({
             message: `Imported ${importedEvents.length} events successfully`,
-            importedCount: importedEvents.length 
+            importedCount: importedEvents.length
         });
     } catch (error) {
         console.error('Error importing events:', error);
@@ -462,26 +775,81 @@ function detectEmojiFromTitle(title) {
     return '';
 }
 
-// Serve the main HTML file for any non-API routes
-app.get('*', (req, res) => {
+// Serve static files explicitly (Vercel serverless needs explicit routes)
+app.get('/styles.css', (req, res) => {
+    res.sendFile(path.join(__dirname, 'styles.css'));
+});
+
+app.get('/script-server.js', (req, res) => {
+    res.sendFile(path.join(__dirname, 'script-server.js'));
+});
+
+app.get('/script.js', (req, res) => {
+    res.sendFile(path.join(__dirname, 'script.js'));
+});
+
+// Serve HTML files explicitly
+app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`Family Calendar server running on http://localhost:${PORT}`);
-    console.log(`
-🎉 Server Features:
-   • REST API for events (/api/events)
-   • File upload for calendar imports (/api/import)
-   • Persistent JSON file storage
-   • CORS enabled for development
-   
-📂 API Endpoints:
-   GET    /api/events        - Get all events
-   POST   /api/events        - Create new event
-   PUT    /api/events/:id    - Update event
-   DELETE /api/events/:id    - Delete event
-   POST   /api/import        - Import calendar file
-`);
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'login.html'));
 });
+
+app.get('/login.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+app.get('/index.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Start server after initializing database
+async function startServer() {
+    try {
+        console.log('🚀 Starting Family Calendar server...');
+        console.log('Environment:', process.env.NODE_ENV || 'development');
+        console.log('Has POSTGRES_URL:', !!process.env.POSTGRES_URL);
+        console.log('Has REDIS_URL:', !!process.env.REDIS_URL);
+
+        // Initialize database (don't fail if it errors - tables might exist)
+        console.log('🗄️  Initializing database...');
+        try {
+            await db.initializeDB();
+            console.log('✅ Database initialized');
+        } catch (dbErr) {
+            console.error('⚠️  Database init warning (may be okay if tables exist):', dbErr.message);
+        }
+
+        // Start listening (only for local dev, Vercel uses module.exports)
+        if (!IS_PRODUCTION) {
+            app.listen(PORT, () => {
+                console.log(`✅ Family Calendar server running on port ${PORT}`);
+            });
+        }
+    } catch (err) {
+        console.error('❌ Failed to start server:', err);
+        console.error('Stack:', err.stack);
+        // Don't exit in production - let Vercel handle restart
+        if (!IS_PRODUCTION) {
+            process.exit(1);
+        }
+    }
+}
+
+// For Vercel serverless, initialize and export
+if (IS_PRODUCTION) {
+    // Initialize immediately (synchronously set up session store)
+    (async () => {
+        try {
+            await startServer();
+        } catch (err) {
+            console.error('Startup error:', err);
+        }
+    })();
+    module.exports = app;
+} else {
+    // Start normally for local development
+    startServer();
+}
