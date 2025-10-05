@@ -173,12 +173,27 @@ app.use(async (req, res, next) => {
 
 // Debug middleware - log all requests with session info
 app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`, {
+    console.log(`\n========== ${req.method} ${req.path} ==========`);
+    console.log('Headers:', JSON.stringify({
+        cookie: req.headers.cookie,
+        'user-agent': req.headers['user-agent']
+    }, null, 2));
+    console.log('Session:', JSON.stringify({
         hasSession: !!req.session,
         sessionID: req.sessionID,
         userId: req.session?.userId,
-        hasCookie: !!req.headers.cookie
-    });
+        userRole: req.session?.userRole,
+        cookie: req.session?.cookie
+    }, null, 2));
+
+    // Intercept response to log Set-Cookie headers
+    const originalSend = res.send;
+    res.send = function(data) {
+        console.log('Response Set-Cookie:', res.getHeader('Set-Cookie'));
+        return originalSend.call(this, data);
+    };
+
+    console.log('='.repeat(50) + '\n');
     next();
 });
 
