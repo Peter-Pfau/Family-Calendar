@@ -26,8 +26,11 @@ let redisClient = null;
 let isRedisConnected = false;
 let connectionPromise = null;
 
+// TEMPORARY: Force memory sessions to debug cookie issue
+const USE_MEMORY_SESSIONS = true;
+
 try {
-    if (REDIS_URL) {
+    if (REDIS_URL && !USE_MEMORY_SESSIONS) {
         // Production: Use Redis (Vercel, Upstash, etc.)
         console.log('🔴 Setting up Redis session store');
         console.log('REDIS_URL present:', !!REDIS_URL);
@@ -88,27 +91,45 @@ try {
         console.log('✅ Session middleware configured with Redis');
         sessionConfigured = true;
     } else {
-        // Development: Use SQLite
-        console.log('💾 Setting up SQLite session store');
-        const SQLiteStore = require('connect-sqlite3')(session);
-        const store = new SQLiteStore({
-            db: 'sessions.db',
-            dir: './data'
-        });
+        // Development or fallback: Use memory store (or SQLite locally)
+        if (USE_MEMORY_SESSIONS || IS_PRODUCTION) {
+            console.log('🧠 Setting up memory session store (TESTING MODE)');
+            app.use(session({
+                secret: SESSION_SECRET,
+                resave: false,
+                saveUninitialized: false,
+                cookie: {
+                    secure: IS_PRODUCTION,
+                    httpOnly: true,
+                    maxAge: 7 * 24 * 60 * 60 * 1000,
+                    sameSite: 'lax',
+                    path: '/'
+                }
+            }));
+            sessionConfigured = true;
+        } else {
+            // Local development: Use SQLite
+            console.log('💾 Setting up SQLite session store');
+            const SQLiteStore = require('connect-sqlite3')(session);
+            const store = new SQLiteStore({
+                db: 'sessions.db',
+                dir: './data'
+            });
 
-        app.use(session({
-            store: store,
-            secret: SESSION_SECRET,
-            resave: false,
-            saveUninitialized: false,
-            cookie: {
-                secure: false,
-                httpOnly: true,
-                maxAge: 7 * 24 * 60 * 60 * 1000,
-                sameSite: 'lax'
-            }
-        }));
-        sessionConfigured = true;
+            app.use(session({
+                store: store,
+                secret: SESSION_SECRET,
+                resave: false,
+                saveUninitialized: false,
+                cookie: {
+                    secure: false,
+                    httpOnly: true,
+                    maxAge: 7 * 24 * 60 * 60 * 1000,
+                    sameSite: 'lax'
+                }
+            }));
+            sessionConfigured = true;
+        }
     }
 } catch (error) {
     console.error('❌ Failed to set up session store:', error);
