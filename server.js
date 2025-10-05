@@ -13,6 +13,9 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'family-calendar-secret-cha
 const REDIS_URL = process.env.REDIS_URL || process.env.KV_URL; // Support both Upstash and Vercel KV
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.VERCEL;
 
+// Trust proxy - CRITICAL for Vercel/serverless (behind reverse proxy)
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(cors({
     origin: true,
