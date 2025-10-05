@@ -24,38 +24,51 @@ app.use(express.json());
 if (REDIS_URL) {
     // Production: Use Redis (Vercel, Upstash, etc.)
     console.log('🔴 Setting up Redis session store');
-    const RedisStore = require('connect-redis').default;
-    const { createClient } = require('redis');
+    console.log('REDIS_URL present:', !!REDIS_URL);
+    console.log('IS_PRODUCTION:', IS_PRODUCTION);
 
-    const redisClient = createClient({
-        url: REDIS_URL,
-        socket: {
-            reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
-            tls: REDIS_URL.startsWith('rediss://'),
-            rejectUnauthorized: false // Accept self-signed certificates (Upstash)
-        }
-    });
+    try {
+        const RedisStore = require('connect-redis').default;
+        const { createClient } = require('redis');
 
-    redisClient.on('error', (err) => console.error('Redis Client Error', err));
-    redisClient.on('connect', () => console.log('✅ Redis connected'));
+        const redisClient = createClient({
+            url: REDIS_URL,
+            socket: {
+                reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
+                tls: REDIS_URL.startsWith('rediss://'),
+                rejectUnauthorized: false // Accept self-signed certificates (Upstash)
+            }
+        });
 
-    // Connect asynchronously but don't block
-    redisClient.connect().catch(err => console.error('Redis connection error:', err));
+        redisClient.on('error', (err) => console.error('Redis Client Error', err));
+        redisClient.on('connect', () => console.log('✅ Redis connected'));
 
-    const store = new RedisStore({ client: redisClient });
+        // Connect asynchronously but don't block
+        redisClient.connect().catch(err => {
+            console.error('Redis connection error:', err);
+            console.error('Redis connection failed - sessions may not persist');
+        });
 
-    app.use(session({
-        store: store,
-        secret: SESSION_SECRET,
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-            secure: IS_PRODUCTION,
-            httpOnly: true,
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-            sameSite: IS_PRODUCTION ? 'none' : 'lax'
-        }
-    }));
+        const store = new RedisStore({ client: redisClient });
+
+        app.use(session({
+            store: store,
+            secret: SESSION_SECRET,
+            resave: false,
+            saveUninitialized: false,
+            cookie: {
+                secure: IS_PRODUCTION,
+                httpOnly: true,
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+                sameSite: IS_PRODUCTION ? 'none' : 'lax'
+            }
+        }));
+
+        console.log('✅ Session middleware configured with Redis');
+    } catch (error) {
+        console.error('❌ Failed to set up Redis session store:', error);
+        throw error;
+    }
 } else {
     // Development: Use SQLite
     console.log('💾 Setting up SQLite session store');
@@ -95,6 +108,20 @@ const upload = multer({
         const ext = path.extname(file.originalname).toLowerCase();
         cb(null, allowedTypes.includes(ext));
     }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        env: {
+            hasRedis: !!REDIS_URL,
+            isProduction: IS_PRODUCTION,
+            hasSessionSecret: !!SESSION_SECRET,
+            hasPostgresUrl: !!process.env.POSTGRES_URL
+        }
+    });
 });
 
 // Ensure data directory exists (for local development only - not needed in production)
@@ -838,16 +865,13 @@ async function startServer() {
     }
 }
 
-// For Vercel serverless, initialize and export
+// For Vercel serverless, export immediately without async init
 if (IS_PRODUCTION) {
-    // Initialize immediately (synchronously set up session store)
-    (async () => {
-        try {
-            await startServer();
-        } catch (err) {
-            console.error('Startup error:', err);
-        }
-    })();
+    console.log('🚀 Vercel serverless mode - exporting app');
+    // Initialize database in background (don't wait)
+    db.initializeDB().catch(err => {
+        console.error('⚠️  Database init warning (may be okay if tables exist):', err.message);
+    });
     module.exports = app;
 } else {
     // Start normally for local development
