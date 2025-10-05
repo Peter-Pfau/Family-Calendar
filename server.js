@@ -22,6 +22,7 @@ app.use(express.json());
 
 // Session configuration - Set up immediately for serverless
 let sessionConfigured = false;
+let redisClient = null;
 
 try {
     if (REDIS_URL) {
@@ -33,7 +34,7 @@ try {
         const RedisStore = require('connect-redis').default;
         const { createClient } = require('redis');
 
-        const redisClient = createClient({
+        redisClient = createClient({
             url: REDIS_URL,
             socket: {
                 reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
@@ -44,14 +45,15 @@ try {
 
         redisClient.on('error', (err) => console.error('Redis Client Error', err));
         redisClient.on('connect', () => console.log('✅ Redis connected'));
+        redisClient.on('ready', () => console.log('✅ Redis ready'));
 
-        // Connect asynchronously but don't block
-        redisClient.connect().catch(err => {
-            console.error('Redis connection error:', err);
-            console.error('Redis connection failed - sessions may not persist');
+        // Connect immediately and wait (critical for session persistence)
+        const connectPromise = redisClient.connect();
+
+        const store = new RedisStore({
+            client: redisClient,
+            ttl: 7 * 24 * 60 * 60 // 7 days in seconds
         });
-
-        const store = new RedisStore({ client: redisClient });
 
         app.use(session({
             store: store,
@@ -59,12 +61,18 @@ try {
             resave: false,
             saveUninitialized: false,
             cookie: {
-                secure: IS_PRODUCTION,
+                secure: true, // Always true for HTTPS (Vercel always uses HTTPS)
                 httpOnly: true,
                 maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-                sameSite: IS_PRODUCTION ? 'none' : 'lax'
+                sameSite: 'lax' // Changed from 'none' - same-site works better for same-domain
             }
         }));
+
+        // Wait for Redis to connect in background (don't block module load)
+        connectPromise.catch(err => {
+            console.error('Redis connection error:', err);
+            console.error('Redis connection failed - sessions may not persist');
+        });
 
         console.log('✅ Session middleware configured with Redis');
         sessionConfigured = true;
@@ -238,11 +246,16 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
+        console.log('Login attempt for:', email);
+
         const user = await db.verifyPassword(email, password);
 
         if (!user) {
+            console.log('Invalid credentials for:', email);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
+
+        console.log('User authenticated:', user.id);
 
         // Set session (if available)
         if (req.session) {
@@ -250,11 +263,22 @@ app.post('/api/auth/login', async (req, res) => {
             req.session.userRole = user.role;
             req.session.familyId = user.familyId || user.family_id;
 
+            console.log('Session before save:', {
+                sessionID: req.sessionID,
+                userId: req.session.userId,
+                userRole: req.session.userRole
+            });
+
             // Explicitly save session before responding
             await new Promise((resolve, reject) => {
                 req.session.save((err) => {
-                    if (err) reject(err);
-                    else resolve();
+                    if (err) {
+                        console.error('Session save error:', err);
+                        reject(err);
+                    } else {
+                        console.log('✅ Session saved successfully');
+                        resolve();
+                    }
                 });
             });
         } else {
@@ -263,6 +287,7 @@ app.post('/api/auth/login', async (req, res) => {
 
         const family = await db.getFamilyById(user.familyId || user.family_id);
 
+        console.log('Sending login response for:', user.email);
         res.json({ user, family });
     } catch (error) {
         console.error('Login error:', error);
@@ -285,14 +310,23 @@ app.post('/api/auth/logout', (req, res) => {
 // Get current user
 app.get('/api/auth/me', requireAuth, async (req, res) => {
     try {
+        console.log('GET /api/auth/me - Session:', {
+            sessionID: req.sessionID,
+            hasSession: !!req.session,
+            userId: req.session?.userId,
+            cookie: req.session?.cookie
+        });
+
         const user = await db.getUserById(req.session.userId);
         if (!user) {
+            console.error('User not found for ID:', req.session.userId);
             return res.status(404).json({ error: 'User not found' });
         }
 
         const { password, ...userWithoutPassword } = user;
         const family = await db.getFamilyById(user.familyId);
 
+        console.log('Successfully retrieved user:', userWithoutPassword.email);
         res.json({ user: userWithoutPassword, family });
     } catch (error) {
         console.error('Get user error:', error);
