@@ -21,13 +21,15 @@ app.use(cors({
 app.use(express.json());
 
 // Session configuration - Set up immediately for serverless
-if (REDIS_URL) {
-    // Production: Use Redis (Vercel, Upstash, etc.)
-    console.log('🔴 Setting up Redis session store');
-    console.log('REDIS_URL present:', !!REDIS_URL);
-    console.log('IS_PRODUCTION:', IS_PRODUCTION);
+let sessionConfigured = false;
 
-    try {
+try {
+    if (REDIS_URL) {
+        // Production: Use Redis (Vercel, Upstash, etc.)
+        console.log('🔴 Setting up Redis session store');
+        console.log('REDIS_URL present:', !!REDIS_URL);
+        console.log('IS_PRODUCTION:', IS_PRODUCTION);
+
         const RedisStore = require('connect-redis').default;
         const { createClient } = require('redis');
 
@@ -65,31 +67,49 @@ if (REDIS_URL) {
         }));
 
         console.log('✅ Session middleware configured with Redis');
-    } catch (error) {
-        console.error('❌ Failed to set up Redis session store:', error);
-        throw error;
-    }
-} else {
-    // Development: Use SQLite
-    console.log('💾 Setting up SQLite session store');
-    const SQLiteStore = require('connect-sqlite3')(session);
-    const store = new SQLiteStore({
-        db: 'sessions.db',
-        dir: './data'
-    });
+        sessionConfigured = true;
+    } else {
+        // Development: Use SQLite
+        console.log('💾 Setting up SQLite session store');
+        const SQLiteStore = require('connect-sqlite3')(session);
+        const store = new SQLiteStore({
+            db: 'sessions.db',
+            dir: './data'
+        });
 
+        app.use(session({
+            store: store,
+            secret: SESSION_SECRET,
+            resave: false,
+            saveUninitialized: false,
+            cookie: {
+                secure: false,
+                httpOnly: true,
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+                sameSite: 'lax'
+            }
+        }));
+        sessionConfigured = true;
+    }
+} catch (error) {
+    console.error('❌ Failed to set up session store:', error);
+    console.error('Error details:', error.message);
+    console.error('Error stack:', error.stack);
+
+    // Fallback to memory store (sessions won't persist across requests)
+    console.log('⚠️  Falling back to memory session store');
     app.use(session({
-        store: store,
         secret: SESSION_SECRET,
         resave: false,
         saveUninitialized: false,
         cookie: {
-            secure: false,
+            secure: IS_PRODUCTION,
             httpOnly: true,
             maxAge: 7 * 24 * 60 * 60 * 1000,
-            sameSite: 'lax'
+            sameSite: IS_PRODUCTION ? 'none' : 'lax'
         }
     }));
+    sessionConfigured = true;
 }
 
 if (!SESSION_SECRET || SESSION_SECRET === 'family-calendar-secret-change-in-production') {
