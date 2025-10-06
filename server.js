@@ -29,11 +29,8 @@ let redisClient = null;
 let isRedisConnected = false;
 let connectionPromise = null;
 
-// TEMPORARY: Force memory sessions to debug cookie issue
-const USE_MEMORY_SESSIONS = false; // Back to Redis now that we fixed trust proxy
-
 try {
-    if (REDIS_URL && !USE_MEMORY_SESSIONS) {
+    if (REDIS_URL) {
         // Production: Use Redis (Vercel, Upstash, etc.)
         console.log('🔴 Setting up Redis session store');
         console.log('REDIS_URL present:', !!REDIS_URL);
@@ -93,80 +90,50 @@ try {
             name: 'connect.sid'
         }));
 
-        // Test middleware to verify session is working
-        app.use((req, res, next) => {
-            if (!req.session) {
-                console.error('❌ SESSION NOT CREATED! Session middleware may have failed');
-            } else {
-                console.log('✅ Session exists on request:', req.sessionID);
-            }
-            next();
-        });
-
         console.log('✅ Session middleware configured with Redis');
         sessionConfigured = true;
+    } else if (!IS_PRODUCTION) {
+        // Local development: Use SQLite
+        console.log('💾 Setting up SQLite session store');
+        const SQLiteStore = require('connect-sqlite3')(session);
+        const store = new SQLiteStore({
+            db: 'sessions.db',
+            dir: './data'
+        });
+
+        app.use(session({
+            store: store,
+            secret: SESSION_SECRET,
+            resave: false,
+            saveUninitialized: false,
+            cookie: {
+                secure: false,
+                httpOnly: true,
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+                sameSite: 'lax'
+            }
+        }));
+        sessionConfigured = true;
     } else {
-        // Development or fallback: Use memory store (or SQLite locally)
-        if (USE_MEMORY_SESSIONS || IS_PRODUCTION) {
-            console.log('🧠 Setting up memory session store (TESTING MODE)');
-            console.log('Session config:', {
-                hasSecret: !!SESSION_SECRET,
-                isProduction: IS_PRODUCTION,
-                trustProxy: app.get('trust proxy')
-            });
+        // Production fallback: memory store (won't work well in serverless!)
+        console.warn('⚠️ Using memory session store - sessions may not persist!');
 
-            const sessionMiddleware = session({
-                secret: SESSION_SECRET,
-                resave: false,
-                saveUninitialized: true, // Changed to true to ensure session is created
-                cookie: {
-                    secure: IS_PRODUCTION,
-                    httpOnly: true,
-                    maxAge: 7 * 24 * 60 * 60 * 1000,
-                    sameSite: 'lax',
-                    path: '/',
-                    domain: undefined // Let browser determine domain
-                },
-                name: 'connect.sid' // Explicitly set session cookie name
-            });
+        const sessionMiddleware = session({
+            secret: SESSION_SECRET,
+            resave: false,
+            saveUninitialized: true,
+            cookie: {
+                secure: IS_PRODUCTION,
+                httpOnly: true,
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+                sameSite: 'lax',
+                path: '/'
+            },
+            name: 'connect.sid'
+        });
 
-            app.use(sessionMiddleware);
-
-            // Test middleware to verify session is working
-            app.use((req, res, next) => {
-                if (!req.session) {
-                    console.error('❌ SESSION NOT CREATED! Session middleware may have failed');
-                } else {
-                    console.log('✅ Session exists on request:', req.sessionID);
-                }
-                next();
-            });
-
-            console.log('✅ Memory session middleware registered');
-            sessionConfigured = true;
-        } else {
-            // Local development: Use SQLite
-            console.log('💾 Setting up SQLite session store');
-            const SQLiteStore = require('connect-sqlite3')(session);
-            const store = new SQLiteStore({
-                db: 'sessions.db',
-                dir: './data'
-            });
-
-            app.use(session({
-                store: store,
-                secret: SESSION_SECRET,
-                resave: false,
-                saveUninitialized: false,
-                cookie: {
-                    secure: false,
-                    httpOnly: true,
-                    maxAge: 7 * 24 * 60 * 60 * 1000,
-                    sameSite: 'lax'
-                }
-            }));
-            sessionConfigured = true;
-        }
+        app.use(sessionMiddleware);
+        sessionConfigured = true;
     }
 } catch (error) {
     console.error('❌ Failed to set up session store:', error);
@@ -208,29 +175,11 @@ app.use(async (req, res, next) => {
     next();
 });
 
-// Debug middleware - log all requests with session info
+// Optional: Light request logging (can be removed in production)
 app.use((req, res, next) => {
-    console.log(`\n========== ${req.method} ${req.path} ==========`);
-    console.log('Headers:', JSON.stringify({
-        cookie: req.headers.cookie,
-        'user-agent': req.headers['user-agent']
-    }, null, 2));
-    console.log('Session:', JSON.stringify({
-        hasSession: !!req.session,
-        sessionID: req.sessionID,
-        userId: req.session?.userId,
-        userRole: req.session?.userRole,
-        cookie: req.session?.cookie
-    }, null, 2));
-
-    // Intercept response to log Set-Cookie headers
-    const originalSend = res.send;
-    res.send = function(data) {
-        console.log('Response Set-Cookie:', res.getHeader('Set-Cookie'));
-        return originalSend.call(this, data);
-    };
-
-    console.log('='.repeat(50) + '\n');
+    if (req.path.startsWith('/api/')) {
+        console.log(`${req.method} ${req.path} - Session: ${req.session?.userId || 'none'}`);
+    }
     next();
 });
 
@@ -356,28 +305,17 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
-        console.log('Login attempt for:', email);
-
         const user = await db.verifyPassword(email, password);
 
         if (!user) {
-            console.log('Invalid credentials for:', email);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
-        console.log('User authenticated:', user.id);
-
-        // Set session (if available)
+        // Set session
         if (req.session) {
             req.session.userId = user.id;
             req.session.userRole = user.role;
             req.session.familyId = user.familyId || user.family_id;
-
-            console.log('Session before save:', {
-                sessionID: req.sessionID,
-                userId: req.session.userId,
-                userRole: req.session.userRole
-            });
 
             // Explicitly save session before responding
             await new Promise((resolve, reject) => {
@@ -386,7 +324,6 @@ app.post('/api/auth/login', async (req, res) => {
                         console.error('Session save error:', err);
                         reject(err);
                     } else {
-                        console.log('✅ Session saved successfully');
                         resolve();
                     }
                 });
@@ -396,8 +333,6 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         const family = await db.getFamilyById(user.familyId || user.family_id);
-
-        console.log('Sending login response for:', user.email);
         res.json({ user, family });
     } catch (error) {
         console.error('Login error:', error);
@@ -420,23 +355,14 @@ app.post('/api/auth/logout', (req, res) => {
 // Get current user
 app.get('/api/auth/me', requireAuth, async (req, res) => {
     try {
-        console.log('GET /api/auth/me - Session:', {
-            sessionID: req.sessionID,
-            hasSession: !!req.session,
-            userId: req.session?.userId,
-            cookie: req.session?.cookie
-        });
-
         const user = await db.getUserById(req.session.userId);
         if (!user) {
-            console.error('User not found for ID:', req.session.userId);
             return res.status(404).json({ error: 'User not found' });
         }
 
         const { password, ...userWithoutPassword } = user;
         const family = await db.getFamilyById(user.familyId);
 
-        console.log('Successfully retrieved user:', userWithoutPassword.email);
         res.json({ user: userWithoutPassword, family });
     } catch (error) {
         console.error('Get user error:', error);
