@@ -30,7 +30,7 @@ let isRedisConnected = false;
 let connectionPromise = null;
 
 // TEMPORARY: Force memory sessions to debug cookie issue
-const USE_MEMORY_SESSIONS = true;
+const USE_MEMORY_SESSIONS = false; // Back to Redis now that we fixed trust proxy
 
 try {
     if (REDIS_URL && !USE_MEMORY_SESSIONS) {
@@ -81,15 +81,27 @@ try {
             store: store,
             secret: SESSION_SECRET,
             resave: false,
-            saveUninitialized: false,
+            saveUninitialized: true, // Changed to true - ensures session cookie is always sent
             cookie: {
                 secure: true, // Always true for HTTPS (Vercel always uses HTTPS)
                 httpOnly: true,
                 maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
                 sameSite: 'lax', // Changed from 'none' - same-site works better for same-domain
-                path: '/'
-            }
+                path: '/',
+                domain: undefined
+            },
+            name: 'connect.sid'
         }));
+
+        // Test middleware to verify session is working
+        app.use((req, res, next) => {
+            if (!req.session) {
+                console.error('❌ SESSION NOT CREATED! Session middleware may have failed');
+            } else {
+                console.log('✅ Session exists on request:', req.sessionID);
+            }
+            next();
+        });
 
         console.log('✅ Session middleware configured with Redis');
         sessionConfigured = true;
