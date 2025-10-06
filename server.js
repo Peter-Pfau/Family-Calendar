@@ -100,13 +100,14 @@ try {
             app.use(session({
                 secret: SESSION_SECRET,
                 resave: false,
-                saveUninitialized: false,
+                saveUninitialized: true, // Changed to true to ensure session is created
                 cookie: {
                     secure: IS_PRODUCTION,
                     httpOnly: true,
                     maxAge: 7 * 24 * 60 * 60 * 1000,
                     sameSite: 'lax',
-                    path: '/'
+                    path: '/',
+                    domain: undefined // Let browser determine domain
                 }
             }));
             sessionConfigured = true;
