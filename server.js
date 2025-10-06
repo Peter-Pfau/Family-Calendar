@@ -97,7 +97,13 @@ try {
         // Development or fallback: Use memory store (or SQLite locally)
         if (USE_MEMORY_SESSIONS || IS_PRODUCTION) {
             console.log('🧠 Setting up memory session store (TESTING MODE)');
-            app.use(session({
+            console.log('Session config:', {
+                hasSecret: !!SESSION_SECRET,
+                isProduction: IS_PRODUCTION,
+                trustProxy: app.get('trust proxy')
+            });
+
+            const sessionMiddleware = session({
                 secret: SESSION_SECRET,
                 resave: false,
                 saveUninitialized: true, // Changed to true to ensure session is created
@@ -108,8 +114,23 @@ try {
                     sameSite: 'lax',
                     path: '/',
                     domain: undefined // Let browser determine domain
+                },
+                name: 'connect.sid' // Explicitly set session cookie name
+            });
+
+            app.use(sessionMiddleware);
+
+            // Test middleware to verify session is working
+            app.use((req, res, next) => {
+                if (!req.session) {
+                    console.error('❌ SESSION NOT CREATED! Session middleware may have failed');
+                } else {
+                    console.log('✅ Session exists on request:', req.sessionID);
                 }
-            }));
+                next();
+            });
+
+            console.log('✅ Memory session middleware registered');
             sessionConfigured = true;
         } else {
             // Local development: Use SQLite
