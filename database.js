@@ -291,7 +291,7 @@ async function getEventById(id) {
 async function getEventsByFamily(familyId, userId) {
     // Get shared events for the family and private events for the user
     const result = await query(
-        'SELECT * FROM events WHERE (family_id = $1 AND visibility = $2) OR (owner_id = $3 AND visibility = $4) ORDER BY date ASC',
+        'SELECT id, title, TO_CHAR(date, \'YYYY-MM-DD\') as date, time, description, color, emoji, owner_id, family_id, visibility, created_at, updated_at FROM events WHERE (family_id = $1 AND visibility = $2) OR (owner_id = $3 AND visibility = $4) ORDER BY date ASC',
         [familyId, 'shared', userId, 'private']
     );
     return result.rows;
@@ -302,7 +302,7 @@ async function getEventsByMonth(year, month, familyId, userId) {
     const endDate = `${year}-${String(month).padStart(2, '0')}-31`;
 
     const result = await query(
-        'SELECT * FROM events WHERE date >= $1 AND date <= $2 AND ((family_id = $3 AND visibility = $4) OR (owner_id = $5 AND visibility = $6)) ORDER BY date ASC',
+        'SELECT id, title, TO_CHAR(date, \'YYYY-MM-DD\') as date, time, description, color, emoji, owner_id, family_id, visibility, created_at, updated_at FROM events WHERE date >= $1 AND date <= $2 AND ((family_id = $3 AND visibility = $4) OR (owner_id = $5 AND visibility = $6)) ORDER BY date ASC',
         [startDate, endDate, familyId, 'shared', userId, 'private']
     );
     return result.rows;
