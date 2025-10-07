@@ -211,6 +211,21 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Debug endpoint to check events in database
+app.get('/api/debug/events', requireAuth, async (req, res) => {
+    try {
+        const events = await db.getEventsByFamily(req.session.familyId, req.session.userId);
+        res.json({
+            familyId: req.session.familyId,
+            userId: req.session.userId,
+            eventCount: events.length,
+            events: events
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Ensure data directory exists (for local development only - not needed in production)
 async function ensureDataDir() {
     // Skip in production (Vercel) - we use Postgres, not file storage
