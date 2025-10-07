@@ -4,9 +4,272 @@ class FamilyCalendar {
         this.events = [];
         this.currentEditingEvent = null;
         this.useServer = true; // Set to false to use localStorage only
-        
-        this.initializeEventListeners();
-        this.loadEvents();
+        this.currentUser = null;
+        this.currentFamily = null;
+
+        this.checkAuth();
+    }
+
+    async checkAuth() {
+        try {
+            const response = await fetch('/api/auth/me', {
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                // Not authenticated, redirect to login
+                window.location.href = '/login.html';
+                return;
+            }
+
+            const data = await response.json();
+            this.currentUser = data.user;
+            this.currentFamily = data.family;
+
+            // Update UI with user info
+            this.updateUserUI();
+
+            // Initialize app
+            this.initializeEventListeners();
+            this.loadEvents();
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            window.location.href = '/login.html';
+        }
+    }
+
+    updateUserUI() {
+        // Add user info to header
+        const header = document.querySelector('.header');
+        if (header && this.currentUser) {
+            const userInfo = document.createElement('div');
+            userInfo.className = 'user-info';
+            userInfo.style.cssText = 'display: flex; align-items: center; gap: 15px;';
+            userInfo.innerHTML = `
+                <span style="font-size: 14px; color: #666;">
+                    ${this.currentUser.name} (${this.currentUser.role})
+                </span>
+                <button id="logout-btn" class="secondary-btn" style="padding: 6px 12px;">Logout</button>
+                ${this.currentUser.role === 'admin' ? '<button id="family-admin-btn" class="secondary-btn" style="padding: 6px 12px;">Family Admin</button>' : ''}
+            `;
+            header.appendChild(userInfo);
+
+            // Logout button
+            document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+
+            // Family admin button
+            if (this.currentUser.role === 'admin') {
+                document.getElementById('family-admin-btn').addEventListener('click', () => this.showFamilyAdmin());
+            }
+        }
+    }
+
+    async logout() {
+        try {
+            await fetch('/api/auth/logout', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            window.location.href = '/login.html';
+        } catch (error) {
+            console.error('Logout failed:', error);
+            alert('Failed to logout. Please try again.');
+        }
+    }
+
+    async showFamilyAdmin() {
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('family-admin-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'family-admin-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 700px;">
+                    <div class="modal-header">
+                        <h2>Family Administration</h2>
+                        <span class="close" id="close-family-admin">&times;</span>
+                    </div>
+                    <div style="margin: 20px 0;">
+                        <h3 style="margin-bottom: 15px;">Family Members</h3>
+                        <div id="family-members-list"></div>
+                        <div style="margin-top: 20px;">
+                            <h3 style="margin-bottom: 10px;">Invite New Member</h3>
+                            <form id="invite-form" style="display: flex; gap: 10px; align-items: end;">
+                                <div class="form-group" style="flex: 1; margin: 0;">
+                                    <label for="invite-email">Email:</label>
+                                    <input type="email" id="invite-email" required>
+                                </div>
+                                <div class="form-group" style="width: 150px; margin: 0;">
+                                    <label for="invite-role">Role:</label>
+                                    <select id="invite-role">
+                                        <option value="adult">Adult</option>
+                                        <option value="child">Child</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="primary-btn" style="padding: 12px 20px;">Send Invite</button>
+                            </form>
+                        </div>
+                        <div style="margin-top: 20px;">
+                            <h3 style="margin-bottom: 10px;">Pending Invitations</h3>
+                            <div id="pending-invitations-list"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // Close button
+            document.getElementById('close-family-admin').addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+
+            // Invite form
+            document.getElementById('invite-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await this.sendInvitation();
+            });
+        }
+
+        // Load family data
+        await this.loadFamilyData();
+
+        modal.style.display = 'block';
+    }
+
+    async loadFamilyData() {
+        try {
+            // Load family members
+            const membersResponse = await fetch('/api/family/members', {
+                credentials: 'include'
+            });
+            const members = await membersResponse.json();
+
+            const membersList = document.getElementById('family-members-list');
+            membersList.innerHTML = members.map(member => `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px;">
+                    <div>
+                        <strong>${member.name}</strong>
+                        <span style="color: #666; font-size: 13px; margin-left: 10px;">${member.email}</span>
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        ${member.id === this.currentUser.id ?
+                            `<span style="color: #667eea; font-weight: 600;">${member.role} (You)</span>` :
+                            `<select data-user-id="${member.id}" class="role-select" style="padding: 4px 8px;">
+                                <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
+                                <option value="adult" ${member.role === 'adult' ? 'selected' : ''}>Adult</option>
+                                <option value="child" ${member.role === 'child' ? 'selected' : ''}>Child</option>
+                            </select>
+                            <button class="danger-btn" onclick="familyCalendar.removeMember('${member.id}')" style="padding: 4px 12px; font-size: 13px;">Remove</button>`
+                        }
+                    </div>
+                </div>
+            `).join('');
+
+            // Role change listeners
+            document.querySelectorAll('.role-select').forEach(select => {
+                select.addEventListener('change', async (e) => {
+                    const userId = e.target.dataset.userId;
+                    const newRole = e.target.value;
+                    await this.updateMemberRole(userId, newRole);
+                });
+            });
+
+            // Load pending invitations
+            const invitationsResponse = await fetch('/api/family/invitations', {
+                credentials: 'include'
+            });
+            const invitations = await invitationsResponse.json();
+
+            const invitationsList = document.getElementById('pending-invitations-list');
+            if (invitations.length === 0) {
+                invitationsList.innerHTML = '<p style="color: #999; font-size: 14px;">No pending invitations</p>';
+            } else {
+                invitationsList.innerHTML = invitations.filter(inv => inv.status === 'pending').map(inv => `
+                    <div style="padding: 10px; background: #fff3cd; border-radius: 6px; margin-bottom: 6px;">
+                        <strong>${inv.email}</strong>
+                        <span style="color: #666; font-size: 13px; margin-left: 10px;">as ${inv.role}</span>
+                        <span style="color: #999; font-size: 12px; margin-left: 10px;">Expires: ${new Date(inv.expiresAt).toLocaleDateString()}</span>
+                    </div>
+                `).join('');
+            }
+        } catch (error) {
+            console.error('Error loading family data:', error);
+            alert('Failed to load family data');
+        }
+    }
+
+    async sendInvitation() {
+        const email = document.getElementById('invite-email').value;
+        const role = document.getElementById('invite-role').value;
+
+        try {
+            const response = await fetch('/api/family/invite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email, role })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                alert(`Invitation sent to ${email}!`);
+                document.getElementById('invite-form').reset();
+                await this.loadFamilyData();
+            } else {
+                alert(result.error || 'Failed to send invitation');
+            }
+        } catch (error) {
+            console.error('Error sending invitation:', error);
+            alert('Failed to send invitation');
+        }
+    }
+
+    async updateMemberRole(userId, newRole) {
+        try {
+            const response = await fetch(`/api/family/members/${userId}/role`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ role: newRole })
+            });
+
+            if (response.ok) {
+                alert('Role updated successfully');
+            } else {
+                const result = await response.json();
+                alert(result.error || 'Failed to update role');
+                await this.loadFamilyData(); // Reload to reset select
+            }
+        } catch (error) {
+            console.error('Error updating role:', error);
+            alert('Failed to update role');
+        }
+    }
+
+    async removeMember(userId) {
+        if (!confirm('Are you sure you want to remove this family member?')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/family/members/${userId}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+
+            if (response.ok) {
+                alert('Member removed successfully');
+                await this.loadFamilyData();
+            } else {
+                const result = await response.json();
+                alert(result.error || 'Failed to remove member');
+            }
+        } catch (error) {
+            console.error('Error removing member:', error);
+            alert('Failed to remove member');
+        }
     }
 
     async initializeEventListeners() {
@@ -313,6 +576,7 @@ class FamilyCalendar {
             try {
                 const response = await fetch('/api/import', {
                     method: 'POST',
+                    credentials: 'include',
                     body: formData
                 });
                 
@@ -353,9 +617,12 @@ class FamilyCalendar {
     async loadEvents() {
         if (this.useServer) {
             try {
-                const response = await fetch('/api/events');
+                const response = await fetch('/api/events', {
+                    credentials: 'include'
+                });
                 if (response.ok) {
                     this.events = await response.json();
+                    console.log('📅 Loaded events from server:', this.events);
                 } else {
                     throw new Error('Failed to load events from server');
                 }
@@ -367,7 +634,8 @@ class FamilyCalendar {
         } else {
             this.loadEventsFromLocalStorage();
         }
-        
+
+        console.log('📊 Total events in memory:', this.events.length);
         this.renderCalendar();
     }
 
@@ -378,13 +646,14 @@ class FamilyCalendar {
                 headers: {
                     'Content-Type': 'application/json'
                 },
+                credentials: 'include',
                 body: JSON.stringify(eventData)
             });
-            
+
             if (!response.ok) {
                 throw new Error('Failed to create event');
             }
-            
+
             return await response.json();
         } else {
             const event = {
@@ -404,13 +673,14 @@ class FamilyCalendar {
                 headers: {
                     'Content-Type': 'application/json'
                 },
+                credentials: 'include',
                 body: JSON.stringify(eventData)
             });
-            
+
             if (!response.ok) {
                 throw new Error('Failed to update event');
             }
-            
+
             return await response.json();
         } else {
             const index = this.events.findIndex(e => e.id === id);
@@ -424,9 +694,10 @@ class FamilyCalendar {
     async deleteEvent(id) {
         if (this.useServer) {
             const response = await fetch(`/api/events/${id}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                credentials: 'include'
             });
-            
+
             if (!response.ok) {
                 throw new Error('Failed to delete event');
             }
@@ -604,7 +875,11 @@ class FamilyCalendar {
 
     getEventsForDay(date) {
         const dateString = this.formatDateForInput(date);
-        return this.events.filter(event => event.date === dateString);
+        const dayEvents = this.events.filter(event => event.date === dateString);
+        if (dayEvents.length > 0) {
+            console.log(`📆 Events for ${dateString}:`, dayEvents);
+        }
+        return dayEvents;
     }
 
     isSameDay(date1, date2) {
@@ -672,6 +947,7 @@ class FamilyCalendar {
 }
 
 // Initialize the calendar when the page loads
+let familyCalendar; // Global variable for onclick handlers
 document.addEventListener('DOMContentLoaded', () => {
-    new FamilyCalendar();
+    familyCalendar = new FamilyCalendar();
 });
