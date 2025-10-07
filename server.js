@@ -545,7 +545,9 @@ app.delete('/api/family/members/:id', requireRole('admin'), async (req, res) => 
 // Get all events for family
 app.get('/api/events', requireAuth, async (req, res) => {
     try {
+        console.log('Loading events for family:', req.session.familyId, 'user:', req.session.userId);
         const events = await db.getEventsByFamily(req.session.familyId, req.session.userId);
+        console.log('Loaded events:', events.length, 'events');
         res.json(events);
     } catch (error) {
         console.error('Error loading events:', error);
@@ -579,12 +581,20 @@ app.get('/api/events/monthly/all', requireAuth, async (req, res) => {
 // Add new event
 app.post('/api/events', requireAuth, async (req, res) => {
     try {
+        console.log('Creating event:', {
+            body: req.body,
+            userId: req.session.userId,
+            familyId: req.session.familyId
+        });
+
         const newEvent = await db.createEvent({
             ...req.body,
             ownerId: req.session.userId,
             familyId: req.session.familyId,
             visibility: req.body.visibility || 'shared'
         });
+
+        console.log('Event created:', newEvent);
         res.status(201).json(newEvent);
     } catch (error) {
         console.error('Error adding event:', error);
