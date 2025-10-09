@@ -178,7 +178,13 @@ app.use(async (req, res, next) => {
 // Optional: Light request logging (can be removed in production)
 app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) {
-        console.log(`${req.method} ${req.path} - Session: ${req.session?.userId || 'none'}`);
+        console.log(`${req.method} ${req.path}`, {
+            hasSession: !!req.session,
+            sessionID: req.sessionID,
+            userId: req.session?.userId,
+            hasCookie: !!req.headers.cookie,
+            cookieHeader: req.headers.cookie
+        });
     }
     next();
 });
