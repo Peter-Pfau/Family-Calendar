@@ -78,7 +78,8 @@ try {
             store: store,
             secret: SESSION_SECRET,
             resave: false,
-            saveUninitialized: true, // Changed to true - ensures session cookie is always sent
+            saveUninitialized: false, // Changed back to false - only save when modified
+            rolling: true, // Refresh session on each request
             cookie: {
                 secure: true, // Always true for HTTPS (Vercel always uses HTTPS)
                 httpOnly: true,
@@ -334,9 +335,16 @@ app.post('/api/auth/login', async (req, res) => {
 
         // Set session
         if (req.session) {
+            console.log('Before setting session - sessionID:', req.sessionID);
             req.session.userId = user.id;
             req.session.userRole = user.role;
             req.session.familyId = user.familyId || user.family_id;
+
+            console.log('After setting session data:', {
+                sessionID: req.sessionID,
+                userId: req.session.userId,
+                userRole: req.session.userRole
+            });
 
             // Explicitly save session before responding
             await new Promise((resolve, reject) => {
@@ -345,6 +353,7 @@ app.post('/api/auth/login', async (req, res) => {
                         console.error('Session save error:', err);
                         reject(err);
                     } else {
+                        console.log('✅ Session saved successfully - sessionID:', req.sessionID);
                         resolve();
                     }
                 });
