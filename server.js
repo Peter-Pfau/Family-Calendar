@@ -71,8 +71,29 @@ try {
             client: redisClient,
             ttl: 7 * 24 * 60 * 60, // 7 days in seconds
             disableTouch: false,
-            disableTTL: false
+            disableTTL: false,
+            prefix: 'sess:'
         });
+
+        // Debug Redis store operations
+        const originalGet = store.get.bind(store);
+        const originalSet = store.set.bind(store);
+
+        store.get = function(sid, callback) {
+            console.log('🔍 Redis GET session:', sid);
+            return originalGet(sid, (err, session) => {
+                console.log('🔍 Redis GET result:', { sid, hasSession: !!session, session, err });
+                callback(err, session);
+            });
+        };
+
+        store.set = function(sid, session, callback) {
+            console.log('💾 Redis SET session:', { sid, session });
+            return originalSet(sid, session, (err) => {
+                console.log('💾 Redis SET result:', { sid, err });
+                if (callback) callback(err);
+            });
+        };
 
         app.use(session({
             store: store,
@@ -183,8 +204,11 @@ app.use((req, res, next) => {
             hasSession: !!req.session,
             sessionID: req.sessionID,
             userId: req.session?.userId,
+            userRole: req.session?.userRole,
+            familyId: req.session?.familyId,
             hasCookie: !!req.headers.cookie,
-            cookieHeader: req.headers.cookie
+            cookieHeader: req.headers.cookie?.substring(0, 100) + '...',
+            fullSession: req.session
         });
     }
     next();
@@ -353,7 +377,13 @@ app.post('/api/auth/login', async (req, res) => {
                         console.error('Session save error:', err);
                         reject(err);
                     } else {
-                        console.log('✅ Session saved successfully - sessionID:', req.sessionID);
+                        console.log('✅ Session saved successfully', {
+                            sessionID: req.sessionID,
+                            userId: req.session.userId,
+                            userRole: req.session.userRole,
+                            familyId: req.session.familyId,
+                            fullSession: req.session
+                        });
                         resolve();
                     }
                 });
