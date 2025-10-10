@@ -6,6 +6,7 @@ class FamilyCalendar {
         this.useServer = true; // Set to false to use localStorage only
         this.currentUser = null;
         this.currentFamily = null;
+        this.currentView = 'calendar'; // 'calendar' or 'list'
 
         this.checkAuth();
     }
@@ -278,9 +279,12 @@ class FamilyCalendar {
         document.getElementById('next-month').addEventListener('click', () => this.navigateMonth(1));
         document.getElementById('today-btn').addEventListener('click', () => this.goToToday());
         
+        // View toggle button
+        document.getElementById('view-toggle-btn').addEventListener('click', () => this.toggleView());
+
         // Add event button
         document.getElementById('add-event-btn').addEventListener('click', () => this.showAddEventModal());
-        
+
         // Import button
         document.getElementById('import-btn').addEventListener('click', () => this.showImportModal());
         
@@ -886,6 +890,72 @@ class FamilyCalendar {
         return date1.getFullYear() === date2.getFullYear() &&
                date1.getMonth() === date2.getMonth() &&
                date1.getDate() === date2.getDate();
+    }
+
+    toggleView() {
+        if (this.currentView === 'calendar') {
+            this.currentView = 'list';
+            document.getElementById('calendar-view').style.display = 'none';
+            document.getElementById('list-view').style.display = 'block';
+            document.getElementById('view-toggle-btn').innerHTML = '📅 Calendar View';
+            this.renderListView();
+        } else {
+            this.currentView = 'calendar';
+            document.getElementById('calendar-view').style.display = 'block';
+            document.getElementById('list-view').style.display = 'none';
+            document.getElementById('view-toggle-btn').innerHTML = '📋 List View';
+        }
+    }
+
+    renderListView() {
+        const listContainer = document.getElementById('list-events');
+        listContainer.innerHTML = '';
+
+        if (this.events.length === 0) {
+            listContainer.innerHTML = `
+                <div class="list-no-events">
+                    <div class="list-no-events-icon">📅</div>
+                    <h3>No Events</h3>
+                    <p>Click "Add Event" to create your first event</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Sort events by date
+        const sortedEvents = [...this.events].sort((a, b) => {
+            const dateA = new Date(a.date);
+            const dateB = new Date(b.date);
+            return dateA - dateB;
+        });
+
+        sortedEvents.forEach(event => {
+            const eventItem = document.createElement('div');
+            eventItem.className = `list-event-item ${event.color}`;
+            eventItem.addEventListener('click', () => this.showEventDetails(event));
+
+            const eventDate = new Date(event.date + 'T00:00:00');
+            const formattedDate = eventDate.toLocaleDateString('en-US', {
+                weekday: 'short',
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+
+            eventItem.innerHTML = `
+                <div class="list-event-header">
+                    <div class="list-event-title">
+                        ${event.emoji ? `<span>${event.emoji}</span>` : ''}
+                        <span>${event.title}</span>
+                    </div>
+                    <div class="list-event-date">${formattedDate}</div>
+                </div>
+                ${event.time ? `<div class="list-event-time">🕐 ${event.time}</div>` : ''}
+                ${event.description ? `<div class="list-event-description">${event.description}</div>` : ''}
+            `;
+
+            listContainer.appendChild(eventItem);
+        });
     }
 
     formatDateForInput(date) {

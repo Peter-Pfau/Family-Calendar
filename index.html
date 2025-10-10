@@ -17,12 +17,13 @@
                 <button id="today-btn" class="today-btn">Today</button>
             </div>
             <div class="action-buttons">
+                <button id="view-toggle-btn" class="secondary-btn">📋 List View</button>
                 <button id="add-event-btn" class="primary-btn">Add Event</button>
                 <button id="import-btn" class="secondary-btn">Import Calendar</button>
             </div>
         </header>
 
-        <div class="calendar-container">
+        <div class="calendar-container" id="calendar-view">
             <div class="calendar-grid" id="calendar-grid">
                 <div class="day-header">Sun</div>
                 <div class="day-header">Mon</div>
@@ -31,6 +32,12 @@
                 <div class="day-header">Thu</div>
                 <div class="day-header">Fri</div>
                 <div class="day-header">Sat</div>
+            </div>
+        </div>
+
+        <div class="list-container" id="list-view" style="display: none;">
+            <div class="list-events" id="list-events">
+                <!-- Events will be populated here -->
             </div>
         </div>
 
@@ -1070,6 +1077,6 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script-server.js"></script>
 </body>
 </html>

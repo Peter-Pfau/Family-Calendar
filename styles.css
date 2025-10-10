@@ -767,28 +767,136 @@ body {
         margin: 5% auto;
         max-height: 90vh;
     }
-    
+
     .schedules-content {
         padding: 15px;
     }
-    
+
     .schedule-item {
         flex-direction: column;
         text-align: center;
         gap: 10px;
     }
-    
+
     .schedule-icon {
         font-size: 1.5rem;
         align-self: center;
     }
-    
+
     .schedule-section {
         margin-bottom: 20px;
     }
-    
+
     .schedule-section h3 {
         font-size: 1.1rem;
         text-align: center;
     }
+}
+
+/* List View Styles */
+.list-container {
+    padding: 20px;
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.list-events {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.list-event-item {
+    background: white;
+    border-radius: 8px;
+    padding: 15px 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid #3498db;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.list-event-item:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.list-event-item.blue {
+    border-left-color: #3498db;
+}
+
+.list-event-item.green {
+    border-left-color: #2ecc71;
+}
+
+.list-event-item.red {
+    border-left-color: #e74c3c;
+}
+
+.list-event-item.purple {
+    border-left-color: #9b59b6;
+}
+
+.list-event-item.orange {
+    border-left-color: #e67e22;
+}
+
+.list-event-item.pink {
+    border-left-color: #ec4899;
+}
+
+.list-event-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.list-event-title {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #2c3e50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.list-event-date {
+    font-size: 0.95rem;
+    color: #7f8c8d;
+    font-weight: 500;
+}
+
+.list-event-time {
+    font-size: 0.9rem;
+    color: #95a5a6;
+    margin-bottom: 5px;
+}
+
+.list-event-description {
+    font-size: 0.9rem;
+    color: #5a6c7d;
+    line-height: 1.4;
+}
+
+.list-no-events {
+    text-align: center;
+    padding: 60px 20px;
+    color: #95a5a6;
+}
+
+.list-no-events-icon {
+    font-size: 4rem;
+    margin-bottom: 20px;
+}
+
+.list-no-events h3 {
+    font-size: 1.5rem;
+    color: #7f8c8d;
+    margin-bottom: 10px;
+}
+
+.list-no-events p {
+    font-size: 1rem;
+    color: #95a5a6;
 }
