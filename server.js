@@ -1,8 +1,14 @@
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Load env files locally so POSTGRES_URL and other secrets are available outside Vercel
+dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, '.env.local') });
+
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
 const fs = require('fs').promises;
-const path = require('path');
 const multer = require('multer');
 const db = require('./database');
 const { requireAuth, requireRole } = require('./auth-middleware');

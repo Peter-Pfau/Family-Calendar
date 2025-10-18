@@ -288,6 +288,32 @@ body {
     border-color: #3498db;
 }
 
+.form-group.checkbox-field {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    color: #2c3e50;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    accent-color: #1f7aed;
+}
+
+.checkbox-helper {
+    font-size: 0.85rem;
+    color: #7f8c8d;
+}
+
 .form-buttons {
     display: flex;
     gap: 10px;
@@ -473,6 +499,16 @@ body {
 }
 
 @media (max-width: 768px) {
+    .form-group.checkbox-field {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+    }
+
+    .checkbox-helper {
+        margin-left: 0;
+    }
+
     .container {
         padding: 10px;
     }
@@ -796,87 +832,169 @@ body {
 /* List View Styles */
 .list-container {
     padding: 20px;
-    max-width: 1000px;
+    max-width: 1100px;
     margin: 0 auto;
+    height: calc(100vh - 180px);
+    overflow-y: auto;
 }
 
 .list-events {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 20px;
+    padding-bottom: 40px;
 }
 
-.list-event-item {
-    background: white;
-    border-radius: 8px;
-    padding: 15px 20px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    border-left: 4px solid #3498db;
-    cursor: pointer;
-    transition: all 0.3s ease;
+.list-day-card {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 2px 6px rgba(13, 38, 76, 0.12);
+    padding: 18px 24px;
 }
 
-.list-event-item:hover {
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-    transform: translateY(-2px);
+.list-day-card.today {
+    border: 1px solid rgba(31, 122, 237, 0.35);
+    box-shadow: 0 6px 16px rgba(31, 122, 237, 0.18);
 }
 
-.list-event-item.blue {
-    border-left-color: #3498db;
-}
-
-.list-event-item.green {
-    border-left-color: #2ecc71;
-}
-
-.list-event-item.red {
-    border-left-color: #e74c3c;
-}
-
-.list-event-item.purple {
-    border-left-color: #9b59b6;
-}
-
-.list-event-item.orange {
-    border-left-color: #e67e22;
-}
-
-.list-event-item.pink {
-    border-left-color: #ec4899;
-}
-
-.list-event-header {
+.list-day-header {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
-    margin-bottom: 8px;
+    border-bottom: 1px solid #ecf0f1;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
 }
 
-.list-event-title {
-    font-size: 1.2rem;
+.list-day-date {
+    font-size: 1.1rem;
     font-weight: 600;
     color: #2c3e50;
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 
-.list-event-date {
-    font-size: 0.95rem;
-    color: #7f8c8d;
+.list-day-date.today {
+    color: #1f7aed;
+}
+
+.list-day-count {
+    font-size: 0.85rem;
     font-weight: 500;
+    color: #7f8c8d;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
-.list-event-time {
-    font-size: 0.9rem;
-    color: #95a5a6;
-    margin-bottom: 5px;
+.list-day-events {
+    display: flex;
+    flex-direction: column;
 }
 
-.list-event-description {
+.list-day-event {
+    display: grid;
+    grid-template-columns: 14px 90px 1fr;
+    gap: 16px;
+    align-items: start;
+    padding: 12px 0;
+    border-bottom: 1px solid #ecf0f1;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.list-day-event:last-child {
+    border-bottom: none;
+}
+
+.list-day-event:hover {
+    background: #f7fbff;
+}
+
+.list-day-event-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-top: 4px;
+}
+
+.list-day-event-color.blue {
+    background: #3498db;
+}
+
+.list-day-event-color.green {
+    background: #2ecc71;
+}
+
+.list-day-event-color.red {
+    background: #e74c3c;
+}
+
+.list-day-event-color.purple {
+    background: #9b59b6;
+}
+
+.list-day-event-color.orange {
+    background: #e67e22;
+}
+
+.list-day-event-color.pink {
+    background: #ec4899;
+}
+
+.list-day-event-time {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #34495e;
+}
+
+.list-day-event-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.list-day-event-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #2c3e50;
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.list-day-event-description {
     font-size: 0.9rem;
     color: #5a6c7d;
     line-height: 1.4;
+}
+
+.list-day-event-emoji {
+    font-size: 1.1rem;
+}
+
+.list-day-empty {
+    font-size: 0.9rem;
+    color: #95a5a6;
+    padding: 12px 0;
+    font-style: italic;
+}
+
+@media (max-width: 768px) {
+    .list-container {
+        padding: 15px;
+        height: auto;
+    }
+
+    .list-day-card {
+        padding: 16px 18px;
+    }
+
+    .list-day-event {
+        grid-template-columns: 12px 70px 1fr;
+        gap: 12px;
+    }
+
+    .list-day-event-time {
+        font-size: 0.85rem;
+    }
 }
 
 .list-no-events {

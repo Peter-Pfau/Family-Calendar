@@ -90,6 +90,9 @@ async function initializeDB() {
                 owner_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
                 family_id VARCHAR(255) REFERENCES families(id) ON DELETE CASCADE,
                 visibility VARCHAR(50) NOT NULL DEFAULT 'shared' CHECK (visibility IN ('shared', 'private')),
+                recurrence_type VARCHAR(50),
+                recurrence_interval INTEGER DEFAULT 1,
+                recurrence_until DATE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP
             )
@@ -99,6 +102,12 @@ async function initializeDB() {
         await query(`CREATE INDEX IF NOT EXISTS idx_events_family ON events(family_id)`);
         await query(`CREATE INDEX IF NOT EXISTS idx_events_owner ON events(owner_id)`);
         await query(`CREATE INDEX IF NOT EXISTS idx_events_visibility ON events(visibility)`);
+
+        // Ensure recurrence columns exist for older deployments
+        await query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS recurrence_type VARCHAR(50)`);
+        await query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER DEFAULT 1`);
+        await query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS recurrence_until DATE`);
+        await query(`ALTER TABLE events ALTER COLUMN recurrence_interval SET DEFAULT 1`);
 
         console.log('✅ Database initialized successfully');
     } catch (error) {
@@ -263,9 +272,15 @@ async function getFamilyInvitations(familyId) {
 // Event operations
 async function createEvent(eventData) {
     const id = 'event_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const recurrenceType = eventData.recurrenceType || null;
+    const recurrenceInterval = recurrenceType ? (eventData.recurrenceInterval || 1) : null;
+    const recurrenceUntil = eventData.recurrenceUntil || null;
 
     await query(
-        'INSERT INTO events (id, title, date, time, description, color, emoji, owner_id, family_id, visibility, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())',
+        `INSERT INTO events (
+            id, title, date, time, description, color, emoji, owner_id, family_id, visibility,
+            recurrence_type, recurrence_interval, recurrence_until, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())`,
         [
             id,
             eventData.title,
@@ -276,7 +291,10 @@ async function createEvent(eventData) {
             eventData.emoji || '',
             eventData.ownerId,
             eventData.familyId,
-            eventData.visibility || 'shared'
+            eventData.visibility || 'shared',
+            recurrenceType,
+            recurrenceInterval,
+            recurrenceUntil
         ]
     );
 
@@ -284,14 +302,53 @@ async function createEvent(eventData) {
 }
 
 async function getEventById(id) {
-    const result = await query('SELECT * FROM events WHERE id = $1 LIMIT 1', [id]);
+    const result = await query(
+        `SELECT 
+            id,
+            title,
+            TO_CHAR(date, 'YYYY-MM-DD') AS date,
+            time,
+            description,
+            color,
+            emoji,
+            owner_id,
+            family_id,
+            visibility,
+            recurrence_type AS "recurrenceType",
+            recurrence_interval AS "recurrenceInterval",
+            TO_CHAR(recurrence_until, 'YYYY-MM-DD') AS "recurrenceUntil",
+            created_at,
+            updated_at
+        FROM events
+        WHERE id = $1
+        LIMIT 1`,
+        [id]
+    );
     return result.rows[0] || null;
 }
 
 async function getEventsByFamily(familyId, userId) {
     // Get shared events for the family and private events for the user
     const result = await query(
-        'SELECT id, title, TO_CHAR(date, \'YYYY-MM-DD\') as date, time, description, color, emoji, owner_id, family_id, visibility, created_at, updated_at FROM events WHERE (family_id = $1 AND visibility = $2) OR (owner_id = $3 AND visibility = $4) ORDER BY date ASC',
+        `SELECT
+            id,
+            title,
+            TO_CHAR(date, 'YYYY-MM-DD') AS date,
+            time,
+            description,
+            color,
+            emoji,
+            owner_id,
+            family_id,
+            visibility,
+            recurrence_type AS "recurrenceType",
+            recurrence_interval AS "recurrenceInterval",
+            TO_CHAR(recurrence_until, 'YYYY-MM-DD') AS "recurrenceUntil",
+            created_at,
+            updated_at
+        FROM events
+        WHERE (family_id = $1 AND visibility = $2) OR (owner_id = $3 AND visibility = $4)
+        ORDER BY date ASC`,
         [familyId, 'shared', userId, 'private']
     );
     return result.rows;
@@ -302,7 +359,26 @@ async function getEventsByMonth(year, month, familyId, userId) {
     const endDate = `${year}-${String(month).padStart(2, '0')}-31`;
 
     const result = await query(
-        'SELECT id, title, TO_CHAR(date, \'YYYY-MM-DD\') as date, time, description, color, emoji, owner_id, family_id, visibility, created_at, updated_at FROM events WHERE date >= $1 AND date <= $2 AND ((family_id = $3 AND visibility = $4) OR (owner_id = $5 AND visibility = $6)) ORDER BY date ASC',
+        `SELECT
+            id,
+            title,
+            TO_CHAR(date, 'YYYY-MM-DD') AS date,
+            time,
+            description,
+            color,
+            emoji,
+            owner_id,
+            family_id,
+            visibility,
+            recurrence_type AS "recurrenceType",
+            recurrence_interval AS "recurrenceInterval",
+            TO_CHAR(recurrence_until, 'YYYY-MM-DD') AS "recurrenceUntil",
+            created_at,
+            updated_at
+        FROM events
+        WHERE date >= $1 AND date <= $2
+          AND ((family_id = $3 AND visibility = $4) OR (owner_id = $5 AND visibility = $6))
+        ORDER BY date ASC`,
         [startDate, endDate, familyId, 'shared', userId, 'private']
     );
     return result.rows;
@@ -335,6 +411,22 @@ async function updateEvent(id, updates) {
     }
     if (updates.visibility !== undefined) {
         await query('UPDATE events SET visibility = $1, updated_at = NOW() WHERE id = $2', [updates.visibility, id]);
+    }
+    if (updates.recurrenceType !== undefined) {
+        const recurrenceType = updates.recurrenceType || null;
+        await query('UPDATE events SET recurrence_type = $1, updated_at = NOW() WHERE id = $2', [recurrenceType, id]);
+
+        if (!recurrenceType) {
+            await query('UPDATE events SET recurrence_interval = NULL, recurrence_until = NULL, updated_at = NOW() WHERE id = $1', [id]);
+        }
+    }
+    if (updates.recurrenceInterval !== undefined) {
+        const recurrenceInterval = updates.recurrenceInterval || null;
+        await query('UPDATE events SET recurrence_interval = $1, updated_at = NOW() WHERE id = $2', [recurrenceInterval, id]);
+    }
+    if (updates.recurrenceUntil !== undefined) {
+        const recurrenceUntil = updates.recurrenceUntil || null;
+        await query('UPDATE events SET recurrence_until = $1, updated_at = NOW() WHERE id = $2', [recurrenceUntil, id]);
     }
 
     return await getEventById(id);

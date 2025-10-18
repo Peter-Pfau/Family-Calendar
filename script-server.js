@@ -65,6 +65,191 @@ class FamilyCalendar {
         }
     }
 
+    normalizeEvent(rawEvent) {
+        if (!rawEvent) {
+            return rawEvent;
+        }
+
+        const normalized = { ...rawEvent };
+
+        if (normalized.time === undefined || normalized.time === null) {
+            normalized.time = '';
+        }
+
+        const recurrenceTypeRaw = normalized.recurrenceType ?? normalized.recurrence_type ?? null;
+        const recurrenceIntervalRaw = normalized.recurrenceInterval ?? normalized.recurrence_interval ?? null;
+        const recurrenceUntilRaw = normalized.recurrenceUntil ?? normalized.recurrence_until ?? null;
+
+        const recurrenceType = recurrenceTypeRaw ? String(recurrenceTypeRaw).toLowerCase() : null;
+
+        normalized.recurrenceType = recurrenceType || null;
+        normalized.recurrenceInterval = normalized.recurrenceType ? (Number(recurrenceIntervalRaw) || 1) : null;
+        normalized.recurrenceUntil = recurrenceUntilRaw || null;
+
+        delete normalized.recurrence_type;
+        delete normalized.recurrence_interval;
+        delete normalized.recurrence_until;
+
+        return normalized;
+    }
+
+    normalizeEvents(events = []) {
+        return events.map(event => this.normalizeEvent(event));
+    }
+
+    isRecurringEvent(event) {
+        return !!(event && event.recurrenceType === 'yearly');
+    }
+
+    toDate(dateString) {
+        if (!dateString) {
+            return null;
+        }
+
+        const parts = dateString.split('-').map(Number);
+        if (parts.length !== 3 || parts.some(Number.isNaN)) {
+            return null;
+        }
+
+        const [year, month, day] = parts;
+        const date = new Date(year, month - 1, day);
+        date.setHours(0, 0, 0, 0);
+        return date;
+    }
+
+    occursOnDate(event, targetDate) {
+        if (!event || !event.date) {
+            return false;
+        }
+
+        const formattedTarget = this.formatDateForInput(targetDate);
+        if (event.date === formattedTarget) {
+            return true;
+        }
+
+        if (!this.isRecurringEvent(event)) {
+            return false;
+        }
+
+        const baseDate = this.toDate(event.date);
+        const compareDate = new Date(targetDate);
+        compareDate.setHours(0, 0, 0, 0);
+
+        if (!baseDate || compareDate < baseDate) {
+            return false;
+        }
+
+        if (event.recurrenceUntil) {
+            const untilDate = this.toDate(event.recurrenceUntil);
+            if (untilDate && compareDate > untilDate) {
+                return false;
+            }
+        }
+
+        switch (event.recurrenceType) {
+            case 'yearly':
+                return baseDate.getMonth() === compareDate.getMonth() &&
+                    baseDate.getDate() === compareDate.getDate();
+            default:
+                return false;
+        }
+    }
+
+    createOccurrenceInstance(event, targetDate) {
+        const occurrenceDate = this.formatDateForInput(targetDate);
+        return {
+            ...event,
+            occurrenceDate,
+            isRecurringInstance: this.isRecurringEvent(event) && occurrenceDate !== event.date
+        };
+    }
+
+    parseTimeToMinutes(timeString) {
+        if (!timeString) {
+            return Number.MAX_SAFE_INTEGER;
+        }
+
+        const parts = timeString.split(':').map(Number);
+        if (parts.length < 2 || parts.some(Number.isNaN)) {
+            return Number.MAX_SAFE_INTEGER;
+        }
+
+        const [hours, minutes] = parts;
+        return hours * 60 + minutes;
+    }
+
+    getNextOccurrenceDate(event, fromDate) {
+        if (!event || !event.date) {
+            return null;
+        }
+
+        const startDate = new Date(fromDate);
+        startDate.setHours(0, 0, 0, 0);
+
+        const baseDate = this.toDate(event.date);
+        if (!baseDate) {
+            return null;
+        }
+
+        if (baseDate >= startDate) {
+            return baseDate;
+        }
+
+        if (!this.isRecurringEvent(event)) {
+            return null;
+        }
+
+        const interval = event.recurrenceInterval && Number(event.recurrenceInterval) > 0
+            ? Number(event.recurrenceInterval)
+            : 1;
+
+        const candidate = new Date(baseDate);
+        candidate.setHours(0, 0, 0, 0);
+
+        let safety = 0;
+        while (candidate < startDate && safety < 500) {
+            if (event.recurrenceType === 'yearly') {
+                candidate.setFullYear(candidate.getFullYear() + interval);
+            } else {
+                break;
+            }
+            safety += 1;
+        }
+
+        if (safety >= 500) {
+            return null;
+        }
+
+        if (event.recurrenceUntil) {
+            const untilDate = this.toDate(event.recurrenceUntil);
+            if (untilDate && candidate > untilDate) {
+                return null;
+            }
+        }
+
+        return candidate >= startDate ? candidate : null;
+    }
+
+    calculateListHorizon(startDate) {
+        let furthest = new Date(startDate);
+
+        const nextOccurrences = this.events
+            .map(event => this.getNextOccurrenceDate(event, startDate))
+            .filter(date => date);
+
+        if (nextOccurrences.length > 0) {
+            furthest = nextOccurrences.reduce((maxDate, date) => date > maxDate ? date : maxDate, furthest);
+        }
+
+        const defaultHorizon = new Date(startDate);
+        defaultHorizon.setDate(defaultHorizon.getDate() + 60);
+        if (defaultHorizon > furthest) {
+            furthest = defaultHorizon;
+        }
+
+        return furthest;
+    }
+
     async logout() {
         try {
             await fetch('/api/auth/logout', {
@@ -440,6 +625,11 @@ class FamilyCalendar {
         // Reset emoji picker
         document.getElementById('event-emoji').value = '';
         document.getElementById('emoji-picker-btn').textContent = '😊';
+
+        const recurringCheckbox = document.getElementById('event-recurring');
+        if (recurringCheckbox) {
+            recurringCheckbox.checked = false;
+        }
         
         // Set date if provided
         if (date) {
@@ -454,6 +644,16 @@ class FamilyCalendar {
         const content = document.getElementById('event-details-content');
         
         const titleWithEmoji = event.emoji ? `${event.emoji} ${event.title}` : event.title;
+        const baseDate = this.toDate(event.date);
+        const occurrenceDateString = event.occurrenceDate || event.date;
+        const occurrenceDate = this.toDate(occurrenceDateString) || baseDate || new Date();
+        const formattedDate = this.formatDateForDisplay(occurrenceDate);
+        const recurrenceMarkup = this.isRecurringEvent(event) ? `
+            <div class="detail-item">
+                <div class="detail-label">Repeats:</div>
+                <div class="detail-value">Every year</div>
+            </div>
+        ` : '';
         
         content.innerHTML = `
             <div class="detail-item">
@@ -462,7 +662,7 @@ class FamilyCalendar {
             </div>
             <div class="detail-item">
                 <div class="detail-label">Date:</div>
-                <div class="detail-value">${this.formatDateForDisplay(new Date(event.date))}</div>
+                <div class="detail-value">${formattedDate}</div>
             </div>
             <div class="detail-item">
                 <div class="detail-label">Time:</div>
@@ -472,9 +672,14 @@ class FamilyCalendar {
                 <div class="detail-label">Description:</div>
                 <div class="detail-value">${event.description || 'No description'}</div>
             </div>
+            ${recurrenceMarkup}
         `;
         
-        this.currentEditingEvent = event;
+        const baseEventReference = this.events.find(e => e.id === event.id) || event;
+        this.currentEditingEvent = { ...baseEventReference };
+        if (event.occurrenceDate) {
+            this.currentEditingEvent.occurrenceDate = event.occurrenceDate;
+        }
         modal.style.display = 'block';
     }
 
@@ -499,6 +704,11 @@ class FamilyCalendar {
         // Update emoji button display
         const emojiBtn = document.getElementById('emoji-picker-btn');
         emojiBtn.textContent = this.currentEditingEvent.emoji || '😊';
+
+        const recurringCheckbox = document.getElementById('event-recurring');
+        if (recurringCheckbox) {
+            recurringCheckbox.checked = this.isRecurringEvent(this.currentEditingEvent);
+        }
         
         modal.style.display = 'block';
     }
@@ -521,6 +731,7 @@ class FamilyCalendar {
         const description = document.getElementById('event-description').value;
         const color = document.getElementById('event-color').value;
         const emoji = document.getElementById('event-emoji').value;
+        const isRecurring = document.getElementById('event-recurring').checked;
         
         const eventData = {
             title,
@@ -528,7 +739,10 @@ class FamilyCalendar {
             time,
             description,
             color,
-            emoji
+            emoji,
+            recurrenceType: isRecurring ? 'yearly' : null,
+            recurrenceInterval: isRecurring ? 1 : null,
+            recurrenceUntil: null
         };
         
         try {
@@ -539,9 +753,9 @@ class FamilyCalendar {
                 // Add new event
                 await this.createEvent(eventData);
             }
-            
+
             await this.loadEvents();
-            this.renderCalendar();
+            this.refreshCurrentView();
             this.hideModal('event-modal');
         } catch (error) {
             console.error('Error saving event:', error);
@@ -554,12 +768,20 @@ class FamilyCalendar {
             try {
                 await this.deleteEvent(this.currentEditingEvent.id);
                 await this.loadEvents();
-                this.renderCalendar();
+                this.refreshCurrentView();
                 this.hideModal('event-modal');
             } catch (error) {
                 console.error('Error deleting event:', error);
                 alert('Failed to delete event. Please try again.');
             }
+        }
+    }
+
+    refreshCurrentView() {
+        if (this.currentView === 'calendar') {
+            this.renderCalendar();
+        } else {
+            this.renderListView();
         }
     }
 
@@ -588,7 +810,7 @@ class FamilyCalendar {
                 
                 if (response.ok) {
                     await this.loadEvents();
-                    this.renderCalendar();
+                    this.refreshCurrentView();
                     this.hideModal('import-modal');
                     alert(result.message);
                 } else {
@@ -625,7 +847,8 @@ class FamilyCalendar {
                     credentials: 'include'
                 });
                 if (response.ok) {
-                    this.events = await response.json();
+                    const rawEvents = await response.json();
+                    this.events = this.normalizeEvents(rawEvents);
                     console.log('📅 Loaded events from server:', this.events);
                 } else {
                     throw new Error('Failed to load events from server');
@@ -660,10 +883,10 @@ class FamilyCalendar {
 
             return await response.json();
         } else {
-            const event = {
+            const event = this.normalizeEvent({
                 id: this.generateId(),
                 ...eventData
-            };
+            });
             this.events.push(event);
             this.saveEventsToLocalStorage();
             return event;
@@ -689,7 +912,7 @@ class FamilyCalendar {
         } else {
             const index = this.events.findIndex(e => e.id === id);
             if (index > -1) {
-                this.events[index] = { ...this.events[index], ...eventData };
+                this.events[index] = this.normalizeEvent({ ...this.events[index], ...eventData });
                 this.saveEventsToLocalStorage();
             }
         }
@@ -719,7 +942,8 @@ class FamilyCalendar {
     // localStorage fallback methods
     loadEventsFromLocalStorage() {
         const stored = localStorage.getItem('familyCalendarEvents');
-        this.events = stored ? JSON.parse(stored) : [];
+        const parsed = stored ? JSON.parse(stored) : [];
+        this.events = this.normalizeEvents(parsed);
     }
 
     saveEventsToLocalStorage() {
@@ -739,7 +963,7 @@ class FamilyCalendar {
                 currentEvent = {};
             } else if (line === 'END:VEVENT' && currentEvent) {
                 if (currentEvent.title && currentEvent.date) {
-                    events.push({
+                    events.push(this.normalizeEvent({
                         id: this.generateId(),
                         title: currentEvent.title,
                         date: currentEvent.date,
@@ -747,7 +971,7 @@ class FamilyCalendar {
                         description: currentEvent.description || '',
                         color: 'blue',
                         emoji: ''
-                    });
+                    }));
                 }
                 currentEvent = null;
             } else if (currentEvent) {
@@ -801,7 +1025,7 @@ class FamilyCalendar {
                 const description = columns.length > 3 ? columns[3] : '';
                 
                 if (title && date) {
-                    events.push({
+                    events.push(this.normalizeEvent({
                         id: this.generateId(),
                         title: title,
                         date: date,
@@ -809,7 +1033,7 @@ class FamilyCalendar {
                         description: description,
                         color: 'blue',
                         emoji: ''
-                    });
+                    }));
                 }
             }
         }
@@ -878,12 +1102,31 @@ class FamilyCalendar {
     }
 
     getEventsForDay(date) {
-        const dateString = this.formatDateForInput(date);
-        const dayEvents = this.events.filter(event => event.date === dateString);
-        if (dayEvents.length > 0) {
-            console.log(`📆 Events for ${dateString}:`, dayEvents);
+        const formattedDate = this.formatDateForInput(date);
+        const eventsForDay = [];
+
+        this.events.forEach(event => {
+            if (!event || !event.date) {
+                return;
+            }
+
+            if (event.date === formattedDate) {
+                eventsForDay.push(this.createOccurrenceInstance(event, date));
+                return;
+            }
+
+            if (this.occursOnDate(event, date)) {
+                eventsForDay.push(this.createOccurrenceInstance(event, date));
+            }
+        });
+
+        eventsForDay.sort((a, b) => this.parseTimeToMinutes(a.time) - this.parseTimeToMinutes(b.time));
+
+        if (eventsForDay.length > 0) {
+            console.log(`Events for ${formattedDate}:`, eventsForDay);
         }
-        return dayEvents;
+
+        return eventsForDay;
     }
 
     isSameDay(date1, date2) {
@@ -911,51 +1154,102 @@ class FamilyCalendar {
         const listContainer = document.getElementById('list-events');
         listContainer.innerHTML = '';
 
-        if (this.events.length === 0) {
-            listContainer.innerHTML = `
-                <div class="list-no-events">
-                    <div class="list-no-events-icon">📅</div>
-                    <h3>No Events</h3>
-                    <p>Click "Add Event" to create your first event</p>
-                </div>
-            `;
-            return;
-        }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
-        // Sort events by date
-        const sortedEvents = [...this.events].sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            return dateA - dateB;
-        });
+        const endDate = this.calculateListHorizon(today);
+        const cursor = new Date(today);
 
-        sortedEvents.forEach(event => {
-            const eventItem = document.createElement('div');
-            eventItem.className = `list-event-item ${event.color}`;
-            eventItem.addEventListener('click', () => this.showEventDetails(event));
+        while (cursor <= endDate) {
+            const currentDate = new Date(cursor);
+            const dayEvents = this.getEventsForDay(currentDate);
 
-            const eventDate = new Date(event.date + 'T00:00:00');
-            const formattedDate = eventDate.toLocaleDateString('en-US', {
-                weekday: 'short',
-                year: 'numeric',
-                month: 'short',
+            const dayCard = document.createElement('div');
+            dayCard.className = 'list-day-card';
+            if (this.isSameDay(currentDate, today)) {
+                dayCard.classList.add('today');
+            }
+
+            const header = document.createElement('div');
+            header.className = 'list-day-header';
+
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'list-day-date';
+            if (this.isSameDay(currentDate, today)) {
+                dayLabel.classList.add('today');
+            }
+            dayLabel.textContent = currentDate.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
                 day: 'numeric'
             });
 
-            eventItem.innerHTML = `
-                <div class="list-event-header">
-                    <div class="list-event-title">
-                        ${event.emoji ? `<span>${event.emoji}</span>` : ''}
-                        <span>${event.title}</span>
-                    </div>
-                    <div class="list-event-date">${formattedDate}</div>
-                </div>
-                ${event.time ? `<div class="list-event-time">🕐 ${event.time}</div>` : ''}
-                ${event.description ? `<div class="list-event-description">${event.description}</div>` : ''}
-            `;
+            const count = document.createElement('div');
+            count.className = 'list-day-count';
+            count.textContent = dayEvents.length === 0 ? 'No events' : `${dayEvents.length} ${dayEvents.length === 1 ? 'event' : 'events'}`;
 
-            listContainer.appendChild(eventItem);
-        });
+            header.appendChild(dayLabel);
+            header.appendChild(count);
+
+            const eventsWrapper = document.createElement('div');
+            eventsWrapper.className = 'list-day-events';
+
+            if (dayEvents.length === 0) {
+                const emptyState = document.createElement('div');
+                emptyState.className = 'list-day-empty';
+                emptyState.textContent = 'No events scheduled';
+                eventsWrapper.appendChild(emptyState);
+            } else {
+                dayEvents.forEach(event => {
+                    const eventRow = document.createElement('div');
+                    eventRow.className = 'list-day-event';
+                    eventRow.addEventListener('click', () => this.showEventDetails(event));
+
+                    const colorDot = document.createElement('span');
+                    colorDot.className = `list-day-event-color ${event.color || 'blue'}`;
+
+                    const time = document.createElement('span');
+                    time.className = 'list-day-event-time';
+                    time.textContent = event.time ? event.time : 'All day';
+
+                    const content = document.createElement('div');
+                    content.className = 'list-day-event-content';
+
+                    const title = document.createElement('div');
+                    title.className = 'list-day-event-title';
+                    if (event.emoji) {
+                        const emoji = document.createElement('span');
+                        emoji.className = 'list-day-event-emoji';
+                        emoji.textContent = event.emoji;
+                        title.appendChild(emoji);
+                    }
+                    const titleText = document.createElement('span');
+                    titleText.textContent = event.title;
+                    title.appendChild(titleText);
+                    content.appendChild(title);
+
+                    if (event.description) {
+                        const description = document.createElement('div');
+                        description.className = 'list-day-event-description';
+                        description.textContent = event.description;
+                        content.appendChild(description);
+                    }
+
+                    eventRow.appendChild(colorDot);
+                    eventRow.appendChild(time);
+                    eventRow.appendChild(content);
+                    eventsWrapper.appendChild(eventRow);
+                });
+            }
+
+            dayCard.appendChild(header);
+            dayCard.appendChild(eventsWrapper);
+            listContainer.appendChild(dayCard);
+
+            cursor.setDate(cursor.getDate() + 1);
+        }
+
+        listContainer.scrollTop = 0;
     }
 
     formatDateForInput(date) {
