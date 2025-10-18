@@ -556,8 +556,8 @@ body {
 /* Floating Kebab Menu */
 .floating-menu {
     position: fixed;
-    bottom: 30px;
-    right: 30px;
+    top: 20px;
+    right: 20px;
     z-index: 1000;
 }
 
@@ -592,7 +592,7 @@ body {
 
 .kebab-menu {
     position: absolute;
-    bottom: 70px;
+    top: 70px;
     right: 0;
     background: white;
     border-radius: 12px;
@@ -600,7 +600,7 @@ body {
     min-width: 180px;
     opacity: 0;
     visibility: hidden;
-    transform: translateY(10px);
+    transform: translateY(-10px);
     transition: all 0.3s ease;
     border: 1px solid #ecf0f1;
 }
@@ -652,8 +652,8 @@ body {
 /* Mobile responsiveness for floating menu */
 @media (max-width: 768px) {
     .floating-menu {
-        bottom: 20px;
-        right: 20px;
+        top: 15px;
+        right: 15px;
     }
     
     .kebab-btn {
@@ -663,7 +663,7 @@ body {
     
     .kebab-menu {
         min-width: 160px;
-        bottom: 60px;
+        top: 60px;
     }
     
     .menu-item {

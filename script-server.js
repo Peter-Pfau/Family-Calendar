@@ -477,10 +477,12 @@ class FamilyCalendar {
         document.getElementById('close-modal').addEventListener('click', () => this.hideModal('event-modal'));
         document.getElementById('close-import-modal').addEventListener('click', () => this.hideModal('import-modal'));
         document.getElementById('close-details-modal').addEventListener('click', () => this.hideModal('event-details-modal'));
+        document.getElementById('close-schedules-modal').addEventListener('click', () => this.hideModal('schedules-modal'));
         
         // Form buttons
         document.getElementById('cancel-btn').addEventListener('click', () => this.hideModal('event-modal'));
         document.getElementById('close-details-btn').addEventListener('click', () => this.hideModal('event-details-modal'));
+        document.getElementById('close-schedules-btn').addEventListener('click', () => this.hideModal('schedules-modal'));
         document.getElementById('delete-event-btn').addEventListener('click', () => this.deleteCurrentEvent());
         document.getElementById('edit-event-btn').addEventListener('click', () => this.editEventFromDetails());
         
@@ -523,6 +525,9 @@ class FamilyCalendar {
                 this.hideEmojiPicker();
             }
         });
+
+        // Floating kebab menu
+        this.initKebabMenu();
     }
 
     navigateMonth(direction) {
@@ -1273,6 +1278,149 @@ class FamilyCalendar {
         return 'event_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
     }
     
+    initKebabMenu() {
+        const kebabBtn = document.getElementById('kebab-menu-btn');
+        const kebabMenu = document.getElementById('kebab-menu');
+        const schedulesItem = document.getElementById('schedules-menu-item');
+        const exportItem = document.getElementById('export-menu-item');
+        const settingsItem = document.getElementById('settings-menu-item');
+
+        if (!kebabBtn || !kebabMenu) {
+            console.warn('Kebab menu elements not found');
+            return;
+        }
+
+        kebabBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleKebabMenu();
+        });
+
+        if (schedulesItem) {
+            schedulesItem.addEventListener('click', () => {
+                this.hideKebabMenu();
+                this.handleSchedulesClick();
+            });
+        }
+
+        if (exportItem) {
+            exportItem.addEventListener('click', () => {
+                this.hideKebabMenu();
+                this.handleExportClick();
+            });
+        }
+
+        if (settingsItem) {
+            settingsItem.addEventListener('click', () => {
+                this.hideKebabMenu();
+                this.handleSettingsClick();
+            });
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.floating-menu')) {
+                this.hideKebabMenu();
+            }
+        });
+    }
+
+    toggleKebabMenu() {
+        const kebabMenu = document.getElementById('kebab-menu');
+        if (kebabMenu) {
+            kebabMenu.classList.toggle('show');
+        }
+    }
+
+    hideKebabMenu() {
+        const kebabMenu = document.getElementById('kebab-menu');
+        if (kebabMenu) {
+            kebabMenu.classList.remove('show');
+        }
+    }
+
+    handleSchedulesClick() {
+        this.showSchedulesModal();
+    }
+
+    showSchedulesModal() {
+        const modal = document.getElementById('schedules-modal');
+        if (modal) {
+            modal.style.display = 'block';
+            this.initScheduleButtons();
+        }
+    }
+
+    initScheduleButtons() {
+        const attachAlert = (id, message) => {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.onclick = () => alert(message);
+            }
+        };
+
+        attachAlert(
+            'personal-schedules-btn',
+            'Personal schedules\n\nComing soon:\n- Individual family calendars\n- Color coding by person\n- Privacy controls\n- Personalized views'
+        );
+        attachAlert(
+            'recurring-events-btn',
+            'Recurring events\n\nComing soon:\n- Weekly, monthly, yearly patterns\n- Custom recurrence rules\n- End dates and exceptions\n- Bulk edits'
+        );
+        attachAlert(
+            'school-schedules-btn',
+            'School schedules\n\nComing soon:\n- Import district calendars\n- Class timetables\n- Assignment tracking\n- Notification tools'
+        );
+        attachAlert(
+            'work-schedules-btn',
+            'Work schedules\n\nComing soon:\n- Sync with Outlook/Google\n- Meeting reminders\n- Shift tracking\n- Team calendar sharing'
+        );
+        attachAlert(
+            'sports-schedules-btn',
+            'Sports schedules\n\nComing soon:\n- Practice times\n- Game schedules\n- Tournament brackets\n- Team communications'
+        );
+        attachAlert(
+            'activities-schedules-btn',
+            'Activities & clubs\n\nComing soon:\n- Music lessons\n- Art classes\n- Club meetings\n- Performance dates'
+        );
+    }
+
+    handleExportClick() {
+        this.exportEvents();
+    }
+
+    handleSettingsClick() {
+        alert('Settings are coming soon!\n\nYou will be able to customize the calendar, set default colors and emojis, manage notifications, and update family profiles.');
+    }
+
+    exportEvents() {
+        if (!this.events || this.events.length === 0) {
+            alert('No events to export. Please add some events first.');
+            return;
+        }
+
+        const csvHeaders = 'Title,Date,Time,Description,Color,Emoji\n';
+        const csvContent = this.events.map(event => {
+            const title = `"${(event.title || '').replace(/"/g, '""')}"`;
+            const date = event.date || '';
+            const time = event.time || '';
+            const description = `"${(event.description || '').replace(/"/g, '""')}"`;
+            const color = event.color || '';
+            const emoji = event.emoji || '';
+            return `${title},${date},${time},${description},${color},${emoji}`;
+        }).join('\n');
+
+        const blob = new Blob([csvHeaders + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `family-calendar-${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        alert(`Exported ${this.events.length} event${this.events.length === 1 ? '' : 's'} to CSV.`);
+    }
+
     toggleEmojiPicker() {
         console.log('toggleEmojiPicker called');
         const emojiPicker = document.getElementById('emoji-picker');
