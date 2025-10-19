@@ -1,8 +1,15 @@
+const BACKGROUND_MAX_SIZE = 1.5 * 1024 * 1024;
+const BACKGROUND_STORAGE_KEY = 'familyCalendarBackgrounds';
+
 class FamilyCalendar {
     constructor() {
         this.currentDate = new Date();
         this.events = [];
         this.currentEditingEvent = null;
+        this.dayBackgrounds = {};
+        this.currentBackgroundDate = null;
+        this.backgroundPreviewData = null;
+        this.backgroundFileDirty = false;
         this.useServer = true; // Set to false to use localStorage only
         this.currentUser = null;
         this.currentFamily = null;
@@ -485,6 +492,24 @@ class FamilyCalendar {
         document.getElementById('close-schedules-btn').addEventListener('click', () => this.hideModal('schedules-modal'));
         document.getElementById('delete-event-btn').addEventListener('click', () => this.deleteCurrentEvent());
         document.getElementById('edit-event-btn').addEventListener('click', () => this.editEventFromDetails());
+        const eventDateInput = document.getElementById('event-date');
+        if (eventDateInput) {
+            eventDateInput.addEventListener('change', (e) => {
+                this.currentBackgroundDate = e.target.value;
+                this.updateBackgroundButtonState();
+            });
+        }
+        
+        const setBackgroundBtn = document.getElementById('set-background-btn');
+        if (setBackgroundBtn) {
+            setBackgroundBtn.addEventListener('click', () => this.openBackgroundFromEvent());
+        }
+        
+        document.getElementById('close-background-modal').addEventListener('click', () => this.hideBackgroundModal());
+        document.getElementById('background-cancel-btn').addEventListener('click', () => this.hideBackgroundModal());
+        document.getElementById('background-save-btn').addEventListener('click', () => this.saveDayBackground());
+        document.getElementById('background-remove-btn').addEventListener('click', () => this.removeDayBackgroundForCurrentDate());
+        document.getElementById('background-file').addEventListener('change', (e) => this.handleBackgroundFileChange(e));
         
         // Event form submission
         document.getElementById('event-form').addEventListener('submit', (e) => this.handleEventSubmit(e));
@@ -527,6 +552,7 @@ class FamilyCalendar {
         });
 
         // Floating kebab menu
+        this.updateBackgroundButtonState();
         this.initKebabMenu();
     }
 
@@ -568,6 +594,7 @@ class FamilyCalendar {
         for (let i = 0; i < 42; i++) {
             const cellDate = new Date(startDate);
             cellDate.setDate(startDate.getDate() + i);
+            const dateKey = this.formatDateForInput(cellDate);
             
             const dayCell = document.createElement('div');
             dayCell.className = 'day-cell';
@@ -607,6 +634,7 @@ class FamilyCalendar {
             // Add click handler for day cell
             dayCell.addEventListener('click', () => this.handleDayClick(cellDate));
             
+            this.applyDayBackground(dayCell, dateKey);
             calendarGrid.appendChild(dayCell);
         }
     }
@@ -640,6 +668,13 @@ class FamilyCalendar {
         if (date) {
             document.getElementById('event-date').value = this.formatDateForInput(date);
         }
+
+        const dateInput = document.getElementById('event-date');
+        const selectedDate = dateInput && dateInput.value
+            ? dateInput.value
+            : this.formatDateForInput(date || new Date());
+        this.currentBackgroundDate = selectedDate;
+        this.updateBackgroundButtonState();
         
         modal.style.display = 'block';
     }
@@ -714,6 +749,9 @@ class FamilyCalendar {
         if (recurringCheckbox) {
             recurringCheckbox.checked = this.isRecurringEvent(this.currentEditingEvent);
         }
+        
+        this.currentBackgroundDate = this.currentEditingEvent.date;
+        this.updateBackgroundButtonState();
         
         modal.style.display = 'block';
     }
@@ -855,6 +893,7 @@ class FamilyCalendar {
                     const rawEvents = await response.json();
                     this.events = this.normalizeEvents(rawEvents);
                     console.log('📅 Loaded events from server:', this.events);
+                    await this.loadDayBackgrounds({ skipRender: true });
                 } else {
                     throw new Error('Failed to load events from server');
                 }
@@ -862,9 +901,11 @@ class FamilyCalendar {
                 console.warn('Server not available, falling back to localStorage:', error);
                 this.useServer = false;
                 this.loadEventsFromLocalStorage();
+                await this.loadDayBackgrounds({ skipRender: true });
             }
         } else {
             this.loadEventsFromLocalStorage();
+            await this.loadDayBackgrounds({ skipRender: true });
         }
 
         console.log('📊 Total events in memory:', this.events.length);
@@ -1278,6 +1319,317 @@ class FamilyCalendar {
         return 'event_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
     }
     
+    async loadDayBackgrounds({ skipRender = false } = {}) {
+        if (this.useServer) {
+            try {
+                const response = await fetch('/api/day-backgrounds', {
+                    credentials: 'include'
+                });
+                if (response.ok) {
+                    const payload = await response.json();
+                    const map = {};
+                    (payload.backgrounds || []).forEach((bg) => {
+                        if (bg.date && bg.imageData) {
+                            map[bg.date] = bg.imageData;
+                        }
+                    });
+                    this.dayBackgrounds = map;
+                    this.saveBackgroundsToLocalStorage();
+                } else {
+                    console.warn('Failed to load day backgrounds:', response.status);
+                }
+            } catch (error) {
+                console.warn('Failed to load day backgrounds:', error);
+            }
+        } else {
+            this.loadBackgroundsFromLocalStorage();
+        }
+
+        this.updateBackgroundButtonState();
+        if (!skipRender && this.currentView === 'calendar') {
+            this.renderCalendar();
+        }
+    }
+
+    loadBackgroundsFromLocalStorage() {
+        try {
+            const stored = localStorage.getItem(BACKGROUND_STORAGE_KEY);
+            this.dayBackgrounds = stored ? JSON.parse(stored) : {};
+        } catch (error) {
+            console.warn('Unable to load backgrounds from localStorage', error);
+            this.dayBackgrounds = {};
+        }
+    }
+
+    saveBackgroundsToLocalStorage() {
+        try {
+            localStorage.setItem(BACKGROUND_STORAGE_KEY, JSON.stringify(this.dayBackgrounds));
+        } catch (error) {
+            console.warn('Unable to save backgrounds to localStorage', error);
+        }
+    }
+
+    applyDayBackground(dayCell, dateKey) {
+        if (!dayCell) {
+            return;
+        }
+
+        const imageData = this.dayBackgrounds[dateKey];
+        if (imageData) {
+            dayCell.style.backgroundImage = `url(${imageData})`;
+            dayCell.style.backgroundSize = 'cover';
+            dayCell.style.backgroundPosition = 'center';
+            dayCell.style.backgroundRepeat = 'no-repeat';
+            dayCell.classList.add('with-background');
+        } else {
+            dayCell.style.backgroundImage = '';
+            dayCell.classList.remove('with-background');
+        }
+    }
+
+    updateBackgroundButtonState() {
+        const button = document.getElementById('set-background-btn');
+        if (!button) {
+            return;
+        }
+
+        if (this.currentBackgroundDate && this.dayBackgrounds[this.currentBackgroundDate]) {
+            button.textContent = 'Change Background Image';
+        } else {
+            button.textContent = 'Set Background Image';
+        }
+        button.disabled = !this.currentBackgroundDate;
+    }
+
+    openBackgroundFromEvent() {
+        const dateInput = document.getElementById('event-date');
+        const dateValue = (dateInput && dateInput.value) ? dateInput.value : this.formatDateForInput(new Date());
+        this.showBackgroundModal(dateValue);
+    }
+
+    showBackgroundModal(dateString) {
+        this.currentBackgroundDate = dateString;
+        const modal = document.getElementById('background-modal');
+        const dateLabel = document.getElementById('background-modal-date');
+        const saveBtn = document.getElementById('background-save-btn');
+        const removeBtn = document.getElementById('background-remove-btn');
+        const fileInput = document.getElementById('background-file');
+
+        if (!modal || !dateLabel || !saveBtn || !removeBtn || !fileInput) {
+            console.error('Background modal elements not found');
+            return;
+        }
+
+        const displayDate = new Date(`${dateString}T00:00:00`);
+        dateLabel.textContent = this.formatDateForDisplay(displayDate);
+
+        this.backgroundPreviewData = this.dayBackgrounds[dateString] || null;
+        this.backgroundFileDirty = false;
+        fileInput.value = '';
+        this.updateBackgroundPreview(this.backgroundPreviewData);
+
+        saveBtn.disabled = !this.backgroundPreviewData;
+        removeBtn.disabled = !this.dayBackgrounds[dateString];
+
+        modal.style.display = 'block';
+    }
+
+    hideBackgroundModal() {
+        const modal = document.getElementById('background-modal');
+        const fileInput = document.getElementById('background-file');
+        const preview = document.getElementById('background-preview');
+        const saveBtn = document.getElementById('background-save-btn');
+        const removeBtn = document.getElementById('background-remove-btn');
+
+        if (modal) {
+            modal.style.display = 'none';
+        }
+        if (fileInput) {
+            fileInput.value = '';
+        }
+        if (preview) {
+            preview.classList.remove('has-image');
+            preview.style.backgroundImage = '';
+        }
+        if (saveBtn) {
+            saveBtn.disabled = true;
+        }
+        if (removeBtn) {
+            removeBtn.disabled = !this.currentBackgroundDate || !this.dayBackgrounds[this.currentBackgroundDate];
+        }
+        this.backgroundPreviewData = null;
+        this.backgroundFileDirty = false;
+    }
+
+    updateBackgroundPreview(imageData) {
+        const preview = document.getElementById('background-preview');
+        const saveBtn = document.getElementById('background-save-btn');
+        if (!preview || !saveBtn) {
+            return;
+        }
+
+        if (imageData) {
+            preview.style.backgroundImage = `url(${imageData})`;
+            preview.classList.add('has-image');
+            saveBtn.disabled = false;
+        } else {
+            preview.style.backgroundImage = '';
+            preview.classList.remove('has-image');
+            saveBtn.disabled = true;
+        }
+    }
+
+    handleBackgroundFileChange(event) {
+        const files = event.target.files;
+        const file = files && files[0];
+        if (!file) {
+            return;
+        }
+
+        if (file.size > BACKGROUND_MAX_SIZE) {
+            alert('Image is too large. Please choose a file under 1.5 MB.');
+            event.target.value = '';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const readerResult = e.target && e.target.result ? e.target.result : null;
+            this.backgroundPreviewData = readerResult;
+            this.backgroundFileDirty = true;
+            this.updateBackgroundPreview(this.backgroundPreviewData);
+        };
+        reader.readAsDataURL(file);
+    }
+
+    async saveDayBackground() {
+        if (!this.currentBackgroundDate || !this.backgroundPreviewData) {
+            alert('Please choose an image before saving.');
+            return;
+        }
+
+        try {
+            const saveBtn = document.getElementById('background-save-btn');
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+            }
+
+            await this.setDayBackground(this.currentBackgroundDate, this.backgroundPreviewData);
+            alert('Background saved successfully!');
+            this.hideBackgroundModal();
+            this.updateBackgroundButtonState();
+            if (this.currentView === 'calendar') {
+                this.renderCalendar();
+            }
+        } catch (error) {
+            console.error('Failed to save background:', error);
+            alert('Failed to save background. Please try again.');
+        } finally {
+            const saveBtn = document.getElementById('background-save-btn');
+            if (saveBtn) {
+                saveBtn.textContent = 'Save Background';
+                saveBtn.disabled = false;
+            }
+        }
+    }
+
+    async removeDayBackgroundForCurrentDate() {
+        if (!this.currentBackgroundDate) {
+            return;
+        }
+
+        if (!this.dayBackgrounds[this.currentBackgroundDate]) {
+            alert('No background set for this day.');
+            return;
+        }
+
+        if (!confirm('Remove the background image for this day?')) {
+            return;
+        }
+
+        try {
+            const removeBtn = document.getElementById('background-remove-btn');
+            if (removeBtn) {
+                removeBtn.disabled = true;
+                removeBtn.textContent = 'Removing...';
+            }
+
+            await this.removeDayBackground(this.currentBackgroundDate);
+            alert('Background removed.');
+            this.hideBackgroundModal();
+            this.updateBackgroundButtonState();
+            if (this.currentView === 'calendar') {
+                this.renderCalendar();
+            }
+        } catch (error) {
+            console.error('Failed to remove background:', error);
+            alert('Failed to remove background. Please try again.');
+        } finally {
+            const removeBtn = document.getElementById('background-remove-btn');
+            if (removeBtn) {
+                removeBtn.textContent = 'Remove Background';
+                removeBtn.disabled = false;
+            }
+        }
+    }
+
+    async setDayBackground(date, imageData) {
+        if (!date || !imageData) {
+            throw new Error('Invalid background data');
+        }
+
+        if (this.useServer) {
+            const response = await fetch('/api/day-backgrounds', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include',
+                body: JSON.stringify({ date, imageData })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || 'Failed to save background');
+            }
+
+            const payload = await response.json();
+            const background = payload.background || payload;
+            if (background && background.date && background.imageData) {
+                this.dayBackgrounds[background.date] = background.imageData;
+            }
+        } else {
+            this.dayBackgrounds[date] = imageData;
+        }
+
+        this.saveBackgroundsToLocalStorage();
+    }
+
+    async removeDayBackground(date) {
+        if (!date) {
+            return;
+        }
+
+        if (this.useServer) {
+            const response = await fetch(`/api/day-backgrounds/${date}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || 'Failed to remove background');
+            }
+        } else {
+            delete this.dayBackgrounds[date];
+            this.saveBackgroundsToLocalStorage();
+            return;
+        }
+
+        delete this.dayBackgrounds[date];
+        this.saveBackgroundsToLocalStorage();
+    }
     initKebabMenu() {
         const kebabBtn = document.getElementById('kebab-menu-btn');
         const kebabMenu = document.getElementById('kebab-menu');

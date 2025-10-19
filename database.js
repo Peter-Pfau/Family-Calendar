@@ -109,6 +109,22 @@ async function initializeDB() {
         await query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS recurrence_until DATE`);
         await query(`ALTER TABLE events ALTER COLUMN recurrence_interval SET DEFAULT 1`);
 
+        // Create day backgrounds table
+        await query(`
+            CREATE TABLE IF NOT EXISTS day_backgrounds (
+                id VARCHAR(255) PRIMARY KEY,
+                family_id VARCHAR(255) REFERENCES families(id) ON DELETE CASCADE,
+                date DATE NOT NULL,
+                image_data TEXT NOT NULL,
+                created_by VARCHAR(255) REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(family_id, date)
+            )
+        `);
+        await query(`CREATE INDEX IF NOT EXISTS idx_day_backgrounds_family ON day_backgrounds(family_id)`);
+        await query(`CREATE INDEX IF NOT EXISTS idx_day_backgrounds_date ON day_backgrounds(date)`);
+
         console.log('✅ Database initialized successfully');
     } catch (error) {
         console.error('Database initialization error:', error);
@@ -497,6 +513,49 @@ async function bulkCreateEvents(events) {
     };
 }
 
+async function setDayBackground(familyId, date, imageData, userId) {
+    const existing = await query('SELECT id FROM day_backgrounds WHERE family_id = $1 AND date = $2 LIMIT 1', [familyId, date]);
+    const backgroundId = existing.rows[0]?.id || ('bg_' + Math.random().toString(36).substring(2) + Date.now().toString(36));
+
+    await query(`
+        INSERT INTO day_backgrounds (id, family_id, date, image_data, created_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (family_id, date)
+        DO UPDATE SET image_data = EXCLUDED.image_data, updated_at = NOW(), created_by = EXCLUDED.created_by
+    `, [backgroundId, familyId, date, imageData, userId]);
+
+    const result = await query(`
+        SELECT
+            id,
+            family_id,
+            TO_CHAR(date, 'YYYY-MM-DD') AS date,
+            image_data AS "imageData"
+        FROM day_backgrounds
+        WHERE id = $1
+        LIMIT 1
+    `, [backgroundId]);
+
+    return result.rows[0] || null;
+}
+
+async function getDayBackgroundsByFamily(familyId) {
+    const result = await query(`
+        SELECT
+            id,
+            TO_CHAR(date, 'YYYY-MM-DD') AS date,
+            image_data AS "imageData"
+        FROM day_backgrounds
+        WHERE family_id = $1
+        ORDER BY date ASC
+    `, [familyId]);
+
+    return result.rows;
+}
+
+async function deleteDayBackground(familyId, date) {
+    await query('DELETE FROM day_backgrounds WHERE family_id = $1 AND date = $2', [familyId, date]);
+}
+
 module.exports = {
     initializeDB,
     createUser,
@@ -520,5 +579,8 @@ module.exports = {
     getEventsByMonth,
     updateEvent,
     deleteEvent,
-    bulkCreateEvents
+    bulkCreateEvents,
+    setDayBackground,
+    getDayBackgroundsByFamily,
+    deleteDayBackground
 };

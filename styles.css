@@ -158,6 +158,8 @@ body {
     cursor: pointer;
     transition: background-color 0.2s;
     position: relative;
+    border-radius: 6px;
+    overflow: hidden;
 }
 
 .day-cell:hover {
@@ -750,6 +752,60 @@ body {
     object-fit: cover;
     border-radius: 10px;
     display: block;
+}
+
+.day-cell.with-background {
+    color: #ffffff;
+}
+
+.day-cell.with-background::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    z-index: 0;
+}
+
+.day-cell.with-background > * {
+    position: relative;
+    z-index: 1;
+}
+
+.day-cell.with-background .event {
+    background: rgba(0, 0, 0, 0.55) !important;
+}
+
+.background-modal-body {
+    padding: 25px;
+    text-align: center;
+}
+
+.background-modal-date {
+    font-weight: 600;
+    margin-bottom: 15px;
+    color: #34495e;
+}
+
+.background-preview {
+    width: 100%;
+    height: 220px;
+    border-radius: 12px;
+    background-color: #f1f3f5;
+    background-size: cover;
+    background-position: center;
+    margin-bottom: 15px;
+    border: 2px dashed #d0d7de;
+}
+
+.background-preview.has-image {
+    border: none;
+}
+
+.background-hint {
+    font-size: 0.85rem;
+    color: #7f8c8d;
+    margin-bottom: 20px;
 }
 
 .schedule-info {

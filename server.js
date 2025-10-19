@@ -19,6 +19,8 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'family-calendar-secret-cha
 const REDIS_URL = process.env.REDIS_URL || process.env.KV_URL; // Support both Upstash and Vercel KV
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.VERCEL;
 
+const MAX_BACKGROUND_BYTES = 1.5 * 1024 * 1024;
+
 // Trust proxy - CRITICAL for Vercel/serverless (behind reverse proxy)
 app.set('trust proxy', 1);
 
@@ -27,7 +29,7 @@ app.use(cors({
     origin: true,
     credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 
 // Session configuration - Set up immediately for serverless
 let sessionConfigured = false;
@@ -717,6 +719,72 @@ app.delete('/api/events/:id', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('Error deleting event:', error);
         res.status(500).json({ error: 'Failed to delete event' });
+    }
+});
+
+// Day background routes
+app.get('/api/day-backgrounds', requireAuth, async (req, res) => {
+    try {
+        const backgrounds = await db.getDayBackgroundsByFamily(req.session.familyId);
+        res.json({ backgrounds });
+    } catch (error) {
+        console.error('Error loading day backgrounds:', error);
+        res.status(500).json({ error: 'Failed to load backgrounds' });
+    }
+});
+
+app.post('/api/day-backgrounds', requireAuth, async (req, res) => {
+    try {
+        const { date, imageData } = req.body || {};
+        if (!date || !imageData) {
+            return res.status(400).json({ error: 'Date and imageData are required' });
+        }
+
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ error: 'Invalid date format' });
+        }
+
+        if (typeof imageData !== 'string' || !imageData.startsWith('data:image/')) {
+            return res.status(400).json({ error: 'Invalid image data' });
+        }
+
+        const commaIndex = imageData.indexOf(',');
+        if (commaIndex === -1) {
+            return res.status(400).json({ error: 'Malformed data URL' });
+        }
+
+        const base64 = imageData.substring(commaIndex + 1);
+        let sizeInBytes = 0;
+        try {
+            sizeInBytes = Buffer.from(base64, 'base64').length;
+        } catch (err) {
+            return res.status(400).json({ error: 'Invalid image encoding' });
+        }
+
+        if (sizeInBytes > MAX_BACKGROUND_BYTES) {
+            return res.status(400).json({ error: 'Image exceeds 1.5 MB size limit' });
+        }
+
+        const background = await db.setDayBackground(req.session.familyId, date, imageData, req.session.userId);
+        res.json({ background });
+    } catch (error) {
+        console.error('Error saving day background:', error);
+        res.status(500).json({ error: 'Failed to save background' });
+    }
+});
+
+app.delete('/api/day-backgrounds/:date', requireAuth, async (req, res) => {
+    try {
+        const { date } = req.params;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ error: 'Invalid date format' });
+        }
+
+        await db.deleteDayBackground(req.session.familyId, date);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error removing day background:', error);
+        res.status(500).json({ error: 'Failed to remove background' });
     }
 });
 

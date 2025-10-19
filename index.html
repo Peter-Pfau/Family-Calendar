@@ -910,13 +910,35 @@
                         <span class="checkbox-helper">Great for birthdays, anniversaries, and yearly tasks.</span>
                     </div>
                     <div class="form-buttons">
+                        <button type="button" id="set-background-btn" class="secondary-btn">Set Background Image</button>
                         <button type="submit" class="primary-btn">Save Event</button>
                         <button type="button" id="delete-event-btn" class="danger-btn" style="display: none;">Delete Event</button>
                         <button type="button" id="cancel-btn" class="secondary-btn">Cancel</button>
                     </div>
                 </form>
+        </div>
+    </div>
+
+    <!-- Day Background Modal -->
+    <div id="background-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Set Day Background</h2>
+                <span class="close" id="close-background-modal">&times;</span>
+            </div>
+            <div class="background-modal-body">
+                <div id="background-modal-date" class="background-modal-date"></div>
+                <div id="background-preview" class="background-preview"></div>
+                <input type="file" id="background-file" accept="image/*">
+                <p class="background-hint">Use JPG or PNG up to 1.5&nbsp;MB for best results.</p>
+            </div>
+            <div class="form-buttons">
+                <button type="button" id="background-save-btn" class="primary-btn" disabled>Save Background</button>
+                <button type="button" id="background-remove-btn" class="danger-btn">Remove Background</button>
+                <button type="button" id="background-cancel-btn" class="secondary-btn">Cancel</button>
             </div>
         </div>
+    </div>
 
         <!-- Import Modal -->
         <div id="import-modal" class="modal">
@@ -992,7 +1014,7 @@
 
                         <div class="schedule-item">
                             <div class="schedule-icon schedule-image">
-                                <img src="images/packers.jpg" alt="West Fargo Packers Basketball">
+                                <img src="images/Packers.jpg" alt="West Fargo Packers Basketball">
                             </div>
                             <div class="schedule-info">
                                 <h4>Packer Basketball</h4>
