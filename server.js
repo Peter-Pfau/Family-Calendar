@@ -746,15 +746,20 @@ app.post('/api/import', requireAuth, upload.single('calendarFile'), async (req, 
             visibility: 'shared'
         }));
 
-        // Bulk create events in database
-        await db.bulkCreateEvents(importedEvents);
+        // Bulk create events in database, skipping duplicates
+        const { created, skipped } = await db.bulkCreateEvents(importedEvents);
 
         // Clean up uploaded file
         await fs.unlink(filePath);
 
+        const duplicateNote = skipped > 0
+            ? ` (${skipped} duplicate${skipped === 1 ? '' : 's'} skipped)`
+            : '';
+
         res.json({
-            message: `Imported ${importedEvents.length} events successfully`,
-            importedCount: importedEvents.length
+            message: `Imported ${created.length} event${created.length === 1 ? '' : 's'} successfully${duplicateNote}`,
+            importedCount: created.length,
+            skippedCount: skipped
         });
     } catch (error) {
         console.error('Error importing events:', error);

@@ -444,11 +444,57 @@ async function deleteEvent(id) {
 
 async function bulkCreateEvents(events) {
     const createdEvents = [];
+    let skippedCount = 0;
+    const seenKeys = new Set();
+
     for (const eventData of events) {
-        const created = await createEvent(eventData);
+        if (!eventData || !eventData.title || !eventData.date || !eventData.familyId) {
+            skippedCount += 1;
+            continue;
+        }
+
+        const normalizedTitle = eventData.title.trim();
+        const normalizedTime = (eventData.time || '').trim();
+        const dedupeKey = [
+            eventData.familyId,
+            normalizedTitle.toLowerCase(),
+            eventData.date,
+            normalizedTime
+        ].join('|');
+
+        if (seenKeys.has(dedupeKey)) {
+            skippedCount += 1;
+            continue;
+        }
+        seenKeys.add(dedupeKey);
+
+        const existing = await query(
+            `SELECT id FROM events
+             WHERE family_id = $1
+               AND LOWER(title) = $2
+               AND date = $3
+               AND COALESCE(time, '') = $4
+             LIMIT 1`,
+            [eventData.familyId, normalizedTitle.toLowerCase(), eventData.date, normalizedTime]
+        );
+
+        if (existing.rows.length > 0) {
+            skippedCount += 1;
+            continue;
+        }
+
+        const created = await createEvent({
+            ...eventData,
+            title: normalizedTitle,
+            time: normalizedTime
+        });
         createdEvents.push(created);
     }
-    return createdEvents;
+
+    return {
+        created: createdEvents,
+        skipped: skippedCount
+    };
 }
 
 module.exports = {

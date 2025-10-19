@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Calendar - Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .auth-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 450px;
+            padding: 40px;
+        }
+
+        .auth-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .auth-header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .auth-header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 12px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            color: #999;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .form-container {
+            display: none;
+        }
+
+        .form-container.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.error {
+            background-color: #fee;
+            border: 1px solid #fcc;
+            color: #c00;
+        }
+
+        .alert.success {
+            background-color: #efe;
+            border: 1px solid #cfc;
+            color: #060;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .invitation-section {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .invitation-section h3 {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .invitation-item {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border: 2px solid #667eea;
+        }
+
+        .invitation-item p {
+            font-size: 13px;
+            color: #666;
+            margin: 4px 0;
+        }
+
+        .invitation-item strong {
+            color: #333;
+        }
+
+        .loader {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-header">
+            <h1>📅 Family Calendar</h1>
+            <p>Organize your family's schedule together</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="login">Login</button>
+            <button class="tab" data-tab="register">Register</button>
+        </div>
+
+        <div id="alert" class="alert"></div>
+
+        <!-- Login Form -->
+        <div id="login-form" class="form-container active">
+            <form id="login">
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+        </div>
+
+        <!-- Register Form -->
+        <div id="register-form" class="form-container">
+            <div id="invitation-list" class="invitation-section" style="display: none;">
+                <h3>You have been invited to:</h3>
+                <div id="invitations"></div>
+            </div>
+
+            <form id="register">
+                <input type="hidden" id="invitation-id" name="invitationId">
+
+                <div class="form-group">
+                    <label for="register-email">Email</label>
+                    <input type="email" id="register-email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-name">Full Name</label>
+                    <input type="text" id="register-name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-password">Password</label>
+                    <input type="password" id="register-password" name="password" required minlength="6">
+                </div>
+                <div class="form-group">
+                    <label for="register-confirm">Confirm Password</label>
+                    <input type="password" id="register-confirm" name="confirmPassword" required minlength="6">
+                </div>
+                <button type="submit" class="btn btn-primary">Create Account</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        const tabs = document.querySelectorAll('.tab');
+        const forms = document.querySelectorAll('.form-container');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+
+                tabs.forEach(t => t.classList.remove('active'));
+                forms.forEach(f => f.classList.remove('active'));
+
+                tab.classList.add('active');
+                document.getElementById(`${tabName}-form`).classList.add('active');
+
+                hideAlert();
+
+                // Check for invitations when switching to register tab
+                if (tabName === 'register') {
+                    const email = document.getElementById('register-email').value;
+                    if (email) {
+                        checkInvitations(email);
+                    }
+                }
+            });
+        });
+
+        // Check for invitations
+        document.getElementById('register-email').addEventListener('blur', async (e) => {
+            const email = e.target.value;
+            if (email) {
+                await checkInvitations(email);
+            }
+        });
+
+        async function checkInvitations(email) {
+            try {
+                const response = await fetch(`/api/invitations/${encodeURIComponent(email)}`);
+                const invitations = await response.json();
+
+                const invitationList = document.getElementById('invitation-list');
+                const invitationsContainer = document.getElementById('invitations');
+
+                if (invitations.length > 0) {
+                    invitationList.style.display = 'block';
+                    invitationsContainer.innerHTML = invitations.map(inv => `
+                        <div class="invitation-item" data-invitation-id="${inv.id}">
+                            <p><strong>Family:</strong> ${inv.familyId}</p>
+                            <p><strong>Role:</strong> ${inv.role}</p>
+                            <p><strong>Invited by:</strong> ${inv.invitedBy}</p>
+                        </div>
+                    `).join('');
+
+                    // Auto-select first invitation
+                    if (invitations[0]) {
+                        document.getElementById('invitation-id').value = invitations[0].id;
+                    }
+
+                    // Allow clicking to select invitation
+                    document.querySelectorAll('.invitation-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            document.querySelectorAll('.invitation-item').forEach(i => {
+                                i.style.borderColor = '#e0e0e0';
+                            });
+                            item.style.borderColor = '#667eea';
+                            document.getElementById('invitation-id').value = item.dataset.invitationId;
+                        });
+                    });
+                } else {
+                    invitationList.style.display = 'none';
+                    document.getElementById('invitation-id').value = '';
+                }
+            } catch (error) {
+                console.error('Error checking invitations:', error);
+            }
+        }
+
+        // Login form
+        document.getElementById('login').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showAlert('Login successful! Redirecting...', 'success');
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    showAlert(result.error || 'Login failed', 'error');
+                }
+            } catch (error) {
+                showAlert('Network error. Please try again.', 'error');
+            }
+        });
+
+        // Register form
+        document.getElementById('register').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+
+            // Validate password match
+            if (data.password !== data.confirmPassword) {
+                showAlert('Passwords do not match', 'error');
+                return;
+            }
+
+            // Check if accepting invitation or creating new family
+            const invitationId = data.invitationId;
+
+            try {
+                let response;
+
+                if (invitationId) {
+                    // Accept invitation
+                    response = await fetch(`/api/invitations/${invitationId}/accept`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            name: data.name,
+                            password: data.password
+                        })
+                    });
+                } else {
+                    // Create new family
+                    response = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            email: data.email,
+                            name: data.name,
+                            password: data.password
+                        })
+                    });
+                }
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showAlert('Registration successful! Redirecting...', 'success');
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    showAlert(result.error || 'Registration failed', 'error');
+                }
+            } catch (error) {
+                showAlert('Network error. Please try again.', 'error');
+            }
+        });
+
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert ${type} show`;
+        }
+
+        function hideAlert() {
+            const alert = document.getElementById('alert');
+            alert.classList.remove('show');
+        }
+    </script>
+</body>
+</html>

@@ -8,6 +8,7 @@ node_modules/
 # Data files
 data/
 uploads/
+*.db
 
 # Logs
 *.log
@@ -23,3 +24,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+.vercel
+.env*.local
