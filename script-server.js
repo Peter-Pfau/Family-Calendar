@@ -271,7 +271,7 @@ class FamilyCalendar {
             modal.id = 'family-admin-modal';
             modal.className = 'modal';
             modal.innerHTML = `
-                <div class="modal-content" style="max-width: 700px;">
+                <div class="modal-content wide">
                     <div class="modal-header">
                         <h2>Family Administration</h2>
                         <span class="close" id="close-family-admin">&times;</span>

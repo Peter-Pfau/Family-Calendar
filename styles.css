@@ -226,6 +226,11 @@ body {
     overflow: visible;
 }
 
+.modal-content.wide {
+    max-width: 700px;
+    padding: 30px;
+}
+
 .modal-header {
     background: #34495e;
     color: white;
