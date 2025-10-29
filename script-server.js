@@ -14,6 +14,7 @@ class FamilyCalendar {
         this.currentUser = null;
         this.currentFamily = null;
         this.currentView = 'calendar'; // 'calendar' or 'list'
+        this.sessionLogLimit = 50;
 
         this.checkAuth();
     }
@@ -54,9 +55,14 @@ class FamilyCalendar {
             userInfo.className = 'user-info';
             userInfo.style.cssText = 'display: flex; align-items: center; gap: 15px;';
             userInfo.innerHTML = `
-                <span style="font-size: 14px; color: #666;">
-                    ${this.currentUser.name} (${this.currentUser.role})
-                </span>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <span style="font-size: 14px; color: #666;">
+                        ${this.currentUser.name} (${this.currentUser.role})
+                    </span>
+                    <span style="font-size: 12px; color: #999;">
+                        Member ID: ${this.currentUser.id} - Family ID: ${this.currentFamily?.id || 'N/A'}
+                    </span>
+                </div>
                 <button id="logout-btn" class="secondary-btn" style="padding: 6px 12px;">Logout</button>
                 ${this.currentUser.role === 'admin' ? '<button id="family-admin-btn" class="secondary-btn" style="padding: 6px 12px;">Family Admin</button>' : ''}
             `;
@@ -279,9 +285,14 @@ class FamilyCalendar {
             modal.className = 'modal';
             modal.innerHTML = `
                 <div class="modal-content wide">
-                    <div class="modal-header">
-                        <h2>Family Administration</h2>
-                        <span class="close" id="close-family-admin">&times;</span>
+                    <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                        <h2 style="margin: 0;">Family Administration</h2>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <button id="member-list-btn" class="secondary-btn" style="padding: 6px 12px;">Members</button>
+                            <button id="session-log-btn" class="secondary-btn" style="padding: 6px 12px;">Session Log</button>
+                            <button id="test-email-btn" class="secondary-btn" style="padding: 6px 12px;">Test Email</button>
+                            <button id="close-family-admin" class="icon-btn" aria-label="Close" style="background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer;">&times;</button>
+                        </div>
                     </div>
                     <div style="margin: 20px 0;">
                         <h3 style="margin-bottom: 15px;">Family Members</h3>
@@ -316,6 +327,15 @@ class FamilyCalendar {
             document.getElementById('close-family-admin').addEventListener('click', () => {
                 modal.style.display = 'none';
             });
+
+            // Session log button
+            document.getElementById('session-log-btn').addEventListener('click', () => this.showSessionLogModal());
+
+            // Member list button
+            document.getElementById('member-list-btn').addEventListener('click', () => this.showMemberListModal());
+
+            // Test email button
+            document.getElementById('test-email-btn').addEventListener('click', () => this.sendTestEmail());
 
             // Invite form
             document.getElementById('invite-form').addEventListener('submit', async (e) => {
@@ -375,21 +395,376 @@ class FamilyCalendar {
             const invitations = await invitationsResponse.json();
 
             const invitationsList = document.getElementById('pending-invitations-list');
-            if (invitations.length === 0) {
+            const pendingInvitations = invitations.filter(inv => inv.status === 'pending');
+            if (pendingInvitations.length === 0) {
                 invitationsList.innerHTML = '<p style="color: #999; font-size: 14px;">No pending invitations</p>';
             } else {
-                invitationsList.innerHTML = invitations.filter(inv => inv.status === 'pending').map(inv => `
-                    <div style="padding: 10px; background: #fff3cd; border-radius: 6px; margin-bottom: 6px;">
-                        <strong>${inv.email}</strong>
-                        <span style="color: #666; font-size: 13px; margin-left: 10px;">as ${inv.role}</span>
-                        <span style="color: #999; font-size: 12px; margin-left: 10px;">Expires: ${new Date(inv.expiresAt).toLocaleDateString()}</span>
+                invitationsList.innerHTML = pendingInvitations.map(inv => `
+                    <div class="invitation-row" data-invite-id="${inv.id}" style="padding: 10px; background: #fff3cd; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 12px; align-items: center;">
+                        <div style="flex: 1; min-width: 0;">
+                            <strong>${inv.email}</strong>
+                            <span style="color: #666; font-size: 13px; margin-left: 10px;">Role: ${inv.role}</span>
+                            <div style="color: #999; font-size: 12px; margin-top: 4px;">${this.renderInvitationExpiry(inv.expiresAt || inv.expires_at)}</div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="secondary-btn invitation-resend-btn" data-invite-id="${inv.id}" style="padding: 6px 12px;">Resend</button>
+                            <button class="danger-btn invitation-cancel-btn" data-invite-id="${inv.id}" style="padding: 6px 12px;">Cancel</button>
+                        </div>
                     </div>
                 `).join('');
+
+                invitationsList.querySelectorAll('.invitation-resend-btn').forEach(button => {
+                    button.addEventListener('click', async (event) => {
+                        const inviteId = event.currentTarget.dataset.inviteId;
+                        await this.resendInvitation(inviteId, event.currentTarget);
+                    });
+                });
+
+                invitationsList.querySelectorAll('.invitation-cancel-btn').forEach(button => {
+                    button.addEventListener('click', async (event) => {
+                        const inviteId = event.currentTarget.dataset.inviteId;
+                        await this.cancelInvitation(inviteId, event.currentTarget);
+                    });
+                });
             }
         } catch (error) {
             console.error('Error loading family data:', error);
             alert('Failed to load family data');
         }
+    }
+
+    async showSessionLogModal() {
+        let modal = document.getElementById('session-log-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'session-log-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content padded" style="max-width: 720px;">
+                    <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                        <h2 style="margin: 0;">Session Log</h2>
+                        <button id="close-session-log" class="icon-btn" aria-label="Close" style="background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer;">&times;</button>
+                    </div>
+                    <div style="margin: 20px 0;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="session-log-limit" style="font-weight: 600;">Show</label>
+                                <select id="session-log-limit" style="padding: 6px 10px;">
+                                    <option value="25">25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                    <option value="200">200</option>
+                                </select>
+                                <span style="font-size: 14px; color: #555;">recent sessions</span>
+                            </div>
+                            <button id="session-log-refresh" class="secondary-btn" style="padding: 6px 12px;">Refresh</button>
+                        </div>
+                        <p id="session-log-status" style="color: #666; font-size: 13px; margin: 12px 0 0;"></p>
+                        <div id="session-log-list" style="margin-top: 15px; max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            `;
+        document.body.appendChild(modal);
+
+        document.getElementById('close-session-log').addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+
+        document.getElementById('session-log-refresh').addEventListener('click', () => this.loadSessionLog());
+
+        document.getElementById('session-log-limit').addEventListener('change', (event) => {
+            this.sessionLogLimit = parseInt(event.target.value, 10) || 50;
+            this.loadSessionLog();
+        });
+    }
+
+    const limitSelect = document.getElementById('session-log-limit');
+        if (limitSelect) {
+            limitSelect.value = String(this.sessionLogLimit);
+        }
+
+        modal.style.display = 'block';
+        await this.loadSessionLog();
+    }
+
+    async loadSessionLog() {
+        const list = document.getElementById('session-log-list');
+        const status = document.getElementById('session-log-status');
+        if (!list) {
+            return;
+        }
+
+        const limit = this.sessionLogLimit || 50;
+
+        list.innerHTML = '<p style="color: #666;">Loading sessions...</p>';
+        if (status) {
+            status.textContent = '';
+        }
+
+        try {
+            const response = await fetch(`/api/admin/sessions?limit=${limit}`, {
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.renderSessionLog(data.sessions || []);
+            if (status) {
+                status.textContent = `Showing ${data.count || 0} of the latest ${data.limit || limit} sessions`;
+            }
+        } catch (error) {
+            console.error('Failed to load session log:', error);
+            list.innerHTML = '<p style="color: #c53030;">Failed to load session log. Please try again.</p>';
+            if (status) {
+                status.textContent = '';
+            }
+        }
+    }
+
+    renderSessionLog(sessions) {
+        const list = document.getElementById('session-log-list');
+        if (!list) {
+            return;
+        }
+
+        if (!sessions || sessions.length === 0) {
+            list.innerHTML = '<p style="color: #666;">No recent sessions found.</p>';
+            return;
+        }
+
+        list.innerHTML = sessions.map((session) => {
+            const displayName = session.userName || session.userEmail || 'Unknown user';
+            const emailLine = session.userEmail ? `<div style="color: #666; font-size: 13px;">${session.userEmail}</div>` : '';
+            const role = session.userRole || 'Unknown';
+            const statusText = session.isExpired ? 'Expired' : 'Active';
+            const statusColor = session.isExpired ? '#c53030' : '#2f855a';
+            const expiresText = session.expiresAt ? this.formatDateTime(session.expiresAt) : 'N/A';
+            const shortSid = session.sid ? `${session.sid.substring(0, 12)}…` : 'N/A';
+            const cookie = session.cookie || {};
+            const secureBadge = cookie.secure
+                ? '<span style="background: #c6f6d5; padding: 4px 8px; border-radius: 9999px;">Secure</span>'
+                : '<span style="background: #fed7d7; padding: 4px 8px; border-radius: 9999px;">Secure: No</span>';
+            const httpOnlyBadge = cookie.httpOnly
+                ? '<span style="background: #c6f6d5; padding: 4px 8px; border-radius: 9999px;">HTTP Only</span>'
+                : '<span style="background: #fed7d7; padding: 4px 8px; border-radius: 9999px;">HTTP Only: No</span>';
+            const sameSiteBadge = cookie.sameSite
+                ? `<span style="background: #e9d8fd; padding: 4px 8px; border-radius: 9999px;">SameSite: ${cookie.sameSite}</span>`
+                : '';
+            const userIdLine = session.userId ? `<div style="color: #888; font-size: 12px;">User ID: ${session.userId}</div>` : '';
+
+            return `
+                <div style="padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 10px; background: #fff;">
+                    <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <div>
+                            <strong>${displayName}</strong>
+                            ${emailLine}
+                            <div style="color: #4a5568; font-size: 13px;">Role: ${role}</div>
+                            ${userIdLine}
+                        </div>
+                        <div style="text-align: right; min-width: 180px;">
+                            <div style="font-size: 13px; color: #4a5568;">Expires: ${expiresText}</div>
+                            <div style="font-size: 12px; color: ${statusColor}; font-weight: 600;">${statusText}</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #4a5568;">
+                        <span style="background: #edf2f7; padding: 4px 8px; border-radius: 9999px;">Session: ${shortSid}</span>
+                        ${secureBadge}
+                        ${httpOnlyBadge}
+                        ${sameSiteBadge}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    renderInvitationExpiry(rawValue) {
+        const expiresAt = rawValue || rawValue === 0 ? rawValue : null;
+        if (!expiresAt) {
+            return 'Expires: Unknown';
+        }
+
+        try {
+            const expiresDate = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+            if (Number.isNaN(expiresDate.getTime())) {
+                return 'Expires: Unknown';
+            }
+
+            const now = new Date();
+            const isExpired = expiresDate < now;
+            const dateText = expiresDate.toLocaleDateString(undefined, {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+            const prefix = isExpired ? 'Expired' : 'Expires';
+
+            return `${prefix}: ${dateText}`;
+        } catch (error) {
+            return 'Expires: Unknown';
+        }
+    }
+
+    async sendTestEmail() {
+        const btn = document.getElementById('test-email-btn');
+        if (!btn) {
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+            btn.textContent = 'Sending...';
+
+            const response = await fetch('/api/admin/test-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email: this.currentUser?.email })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                const statusLine = result.success
+                    ? 'Gmail SMTP reported: email sent successfully.'
+                    : `Gmail SMTP did not send the email: ${result.message || 'Unknown reason.'}`;
+                const configLine = `Email delivery configured: ${result.emailConfigured ? 'Yes' : 'No'}`;
+                alert(`Test email response\n\nTarget: ${result.targetEmail}\n${statusLine}\n${configLine}`);
+            } else {
+                alert(result.error || 'Failed to send test email.');
+            }
+        } catch (error) {
+            console.error('Failed to send test email:', error);
+            alert('Failed to send test email. Check logs for details.');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test Email';
+        }
+    }
+
+    async showMemberListModal() {
+        let modal = document.getElementById('member-list-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'member-list-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content padded" style="max-width: 650px;">
+                    <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                        <h2 style="margin: 0;">Family Members</h2>
+                        <button id="close-member-list" class="icon-btn" aria-label="Close" style="background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer;">&times;</button>
+                    </div>
+                    <div style="margin: 20px 0;">
+                        <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center;">
+                            <span style="font-size: 14px; color: #555;">Summary of current family members.</span>
+                            <button id="member-list-refresh" class="secondary-btn" style="padding: 6px 12px;">Refresh</button>
+                        </div>
+                        <p id="member-list-status" style="color: #666; font-size: 13px; margin: 12px 0 0;"></p>
+                        <div id="member-list-container" style="margin-top: 15px; max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            document.getElementById('close-member-list').addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+
+            document.getElementById('member-list-refresh').addEventListener('click', () => this.loadMemberList());
+        }
+
+        modal.style.display = 'block';
+        await this.loadMemberList();
+    }
+
+    async loadMemberList() {
+        const container = document.getElementById('member-list-container');
+        const status = document.getElementById('member-list-status');
+        if (!container) {
+            return;
+        }
+
+        container.innerHTML = '<p style="color: #666;">Loading members...</p>';
+        if (status) {
+            status.textContent = '';
+        }
+
+        try {
+            const response = await fetch('/api/family/members', {
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+
+            const members = await response.json();
+            this.renderMemberList(members);
+
+            if (status) {
+                const adminCount = members.filter((m) => m.role === 'admin').length;
+                status.textContent = `${members.length} member${members.length === 1 ? '' : 's'} • ${adminCount} admin${adminCount === 1 ? '' : 's'}`;
+            }
+        } catch (error) {
+            console.error('Failed to load member list:', error);
+            container.innerHTML = '<p style="color: #c53030;">Failed to load members. Please try again.</p>';
+            if (status) {
+                status.textContent = '';
+            }
+        }
+    }
+
+    renderMemberList(members) {
+        const container = document.getElementById('member-list-container');
+        if (!container) {
+            return;
+        }
+
+        if (!members || members.length === 0) {
+            container.innerHTML = '<p style="color: #666;">No members found.</p>';
+            return;
+        }
+
+        const sorted = [...members].sort((a, b) => {
+            const roleOrder = { admin: 0, adult: 1, child: 2 };
+            const roleDiff = (roleOrder[a.role] ?? 3) - (roleOrder[b.role] ?? 3);
+            if (roleDiff !== 0) return roleDiff;
+            return (a.name || '').localeCompare(b.name || '');
+        });
+
+        container.innerHTML = sorted.map((member) => {
+            const roleColor = member.role === 'admin' ? '#2563eb'
+                : member.role === 'adult' ? '#2f855a'
+                : '#d69e2e';
+            const joinedAtRaw = member.created_at || member.createdAt;
+            const joinedAt = joinedAtRaw ? this.formatDateTime(joinedAtRaw) : null;
+            const roleLabel = member.role ? member.role.charAt(0).toUpperCase() + member.role.slice(1) : 'Member';
+            const familyId = member.familyId || member.family_id;
+
+            return `
+                <div style="padding: 14px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 10px; background: #fff;">
+                    <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <div>
+                            <strong>${member.name || 'Unnamed Member'}</strong>
+                            <div style="color: #666; font-size: 13px;">${member.email || 'No email provided'}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="display: inline-block; padding: 4px 10px; border-radius: 9999px; background: ${roleColor}1A; color: ${roleColor}; font-size: 12px; font-weight: 600;">
+                                ${roleLabel}
+                            </span>
+                            ${member.id === (this.currentUser && this.currentUser.id) ? '<div style="color: #2563eb; font-size: 12px; margin-top: 4px;">(You)</div>' : ''}
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: #4a5568;">
+                        <span>Member ID: ${member.id || 'N/A'}</span>
+                        ${familyId ? `<span>Family ID: ${familyId}</span>` : ''}
+                        ${joinedAt ? `<span>Joined: ${joinedAt}</span>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
     }
 
     async sendInvitation() {
@@ -407,11 +782,17 @@ class FamilyCalendar {
             const result = await response.json();
 
             if (response.ok) {
-                alert(`Invitation sent to ${email}!`);
+                const emailStatus = result.emailSent
+                    ? 'Invitation email sent via Gmail SMTP.'
+                    : `Invitation email not sent: ${result.emailMessage || 'Gmail SMTP not configured.'}`;
+                const resendNote = typeof result.resendCount === 'number'
+                    ? `\nTotal resends: ${result.resendCount}`
+                    : '';
+                alert(`Invitation recorded for ${email}.\n${emailStatus}${resendNote}`);
                 document.getElementById('invite-form').reset();
                 await this.loadFamilyData();
             } else {
-                alert(result.error || 'Failed to send invitation');
+                alert(result.error || result.emailMessage || 'Failed to send invitation');
             }
         } catch (error) {
             console.error('Error sending invitation:', error);
@@ -1298,6 +1679,102 @@ class FamilyCalendar {
         listContainer.scrollTop = 0;
     }
 
+    formatDateTime(value) {
+        if (!value) {
+            return 'N/A';
+        }
+
+        try {
+            const date = value instanceof Date ? value : new Date(value);
+            if (Number.isNaN(date.getTime())) {
+                return typeof value === 'string' ? value : 'Invalid date';
+            }
+
+            return date.toLocaleString(undefined, {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        } catch (error) {
+            return typeof value === 'string' ? value : 'Unknown';
+        }
+    }
+
+    async cancelInvitation(invitationId, button) {
+        if (!invitationId) {
+            return;
+        }
+
+        if (!confirm('Cancel this pending invitation?')) {
+            return;
+        }
+
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Cancelling...';
+        }
+
+        try {
+            const response = await fetch(`/api/family/invitations/${invitationId}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to cancel invitation');
+            }
+
+            alert(`Invitation for ${result.invitation?.email || 'member'} cancelled.`);
+            await this.loadFamilyData();
+        } catch (error) {
+            console.error('Failed to cancel invitation:', error);
+            alert(error.message || 'Failed to cancel invitation');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.textContent = 'Cancel';
+            }
+        }
+    }
+
+    async resendInvitation(invitationId, button) {
+        if (!invitationId) {
+            return;
+        }
+
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Resending...';
+        }
+
+        try {
+            const response = await fetch(`/api/family/invitations/${invitationId}/resend`, {
+                method: 'POST',
+                credentials: 'include'
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.error || result.emailMessage || 'Failed to resend invitation');
+            }
+
+            const emailStatus = result.emailSent
+                ? 'Invitation email sent via Gmail SMTP.'
+                : `Invitation email not sent: ${result.emailMessage || 'Gmail SMTP not configured.'}`;
+            alert(`Invitation updated.\n${emailStatus}`);
+            await this.loadFamilyData();
+        } catch (error) {
+            console.error('Failed to resend invitation:', error);
+            alert(error.message || 'Failed to resend invitation');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.textContent = 'Resend';
+            }
+        }
+    }
+
     formatDateForInput(date) {
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -1642,6 +2119,29 @@ class FamilyCalendar {
             return;
         }
 
+        const adminItemId = 'kebab-admin-item';
+        let adminItem = document.getElementById(adminItemId);
+
+        if (this.currentUser && this.currentUser.role === 'admin') {
+            if (!adminItem) {
+                adminItem = document.createElement('div');
+                adminItem.id = adminItemId;
+                adminItem.className = 'menu-item';
+                adminItem.innerHTML = `
+                    <span class="menu-icon">🛡️</span>
+                    <span class="menu-text">Family Administration</span>
+                `;
+                kebabMenu.insertBefore(adminItem, kebabMenu.firstChild);
+            }
+            adminItem.style.display = '';
+            adminItem.onclick = () => {
+                this.hideKebabMenu();
+                this.showFamilyAdmin();
+            };
+        } else if (adminItem) {
+            adminItem.style.display = 'none';
+        }
+
         kebabBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this.toggleKebabMenu();
@@ -1675,18 +2175,19 @@ class FamilyCalendar {
         });
     }
 
-    toggleKebabMenu() {
+    toggleKebabMenu(force) {
         const kebabMenu = document.getElementById('kebab-menu');
         if (kebabMenu) {
-            kebabMenu.classList.toggle('show');
+            if (typeof force === 'boolean') {
+                kebabMenu.classList.toggle('show', force);
+            } else {
+                kebabMenu.classList.toggle('show');
+            }
         }
     }
 
     hideKebabMenu() {
-        const kebabMenu = document.getElementById('kebab-menu');
-        if (kebabMenu) {
-            kebabMenu.classList.remove('show');
-        }
+        this.toggleKebabMenu(false);
     }
 
     handleSchedulesClick() {
@@ -1815,3 +2316,5 @@ let familyCalendar; // Global variable for onclick handlers
 document.addEventListener('DOMContentLoaded', () => {
     familyCalendar = new FamilyCalendar();
 });
+
+

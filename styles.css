@@ -233,6 +233,10 @@ body {
     padding: 30px;
 }
 
+.modal-content.padded {
+    padding: 30px;
+}
+
 .modal-header {
     background: #34495e;
     color: white;
@@ -1096,3 +1100,4 @@ body {
     font-size: 1rem;
     color: #95a5a6;
 }
+

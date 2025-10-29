@@ -143,9 +143,16 @@ Family-Calendar/
 |----------|----------|-------------|
 | `POSTGRES_URL` | Production | Postgres connection (auto-added by Vercel) |
 | `SESSION_SECRET` | Production | Secret for session encryption (64+ chars) |
-| `REDIS_URL` or `KV_URL` | Production | Redis/KV connection (auto-added by Vercel KV) |
 | `NODE_ENV` | Optional | Set to `production` for production mode |
 | `PORT` | Optional | Server port (default: 3000) |
+| `GMAIL_USER` | Production | Gmail address used to send invitations |
+| `GMAIL_APP_PASSWORD` | Production | 16-character Gmail App Password |
+| `EMAIL_FROM_NAME` | Optional | Friendly “from” name for outgoing emails |
+| `PUBLIC_APP_URL` | Optional | Public base URL used in invitation links |
+| `GMAIL_TEST_EMAIL` | Optional | Override test-email destination (defaults to `GMAIL_USER`) |
+| `GMAIL_SMTP_HOST` | Optional | Override SMTP host (default: `smtp.gmail.com`) |
+| `GMAIL_SMTP_PORT` | Optional | Override SMTP port (default: `465`) |
+| `GMAIL_SMTP_SECURE` | Optional | Set to `false` to disable TLS (defaults to `true`) |
 
 ## 📝 API Endpoints
 
@@ -164,7 +171,22 @@ POST   /api/family/invite           - Invite member
 GET    /api/family/invitations      - Get pending invitations
 PUT    /api/family/members/:id/role - Update role
 DELETE /api/family/members/:id      - Remove member
+POST   /api/family/invitations/:id/resend - Resend a pending invite
+DELETE /api/family/invitations/:id        - Cancel a pending invite
+GET    /api/admin/sessions          - View recent session log (admin's family)
 ```
+
+> `GET /api/admin/sessions?limit=50` returns recent sessions for the signed-in admin’s family.  
+> Response includes cookie metadata and associated user details; defaults to 50 rows (max 200).
+
+> **Note:** Invitations are stored in the database. Configure Gmail SMTP variables and use the Family Admin → Test Email button to confirm delivery.
+
+## ✉️ Email Delivery (Gmail SMTP)
+
+1. Enable 2-Step Verification on the Gmail account you want to send from.
+2. Create an App Password (choose "Mail" → "Other"), copy the 16-character token.
+3. Add `GMAIL_USER` (email address) and `GMAIL_APP_PASSWORD` (token) to your environment variables. Optionally set `EMAIL_FROM_NAME`, `PUBLIC_APP_URL`, and `GMAIL_TEST_EMAIL`. SMTP defaults to `smtp.gmail.com:465` with TLS, but you can override via `GMAIL_SMTP_HOST`/`GMAIL_SMTP_PORT` if needed.
+4. Redeploy, then open Family Admin → Test Email to confirm Gmail can send before inviting family members.
 
 ### Events (Authenticated)
 ```
@@ -201,17 +223,9 @@ See [SECURITY.md](./SECURITY.md) for complete API documentation.
 
 ## 📊 Session Storage
 
-**Automatic Detection:**
-
-```javascript
-// Development (no REDIS_URL)
-→ SQLite sessions in ./data/sessions.db
-
-// Production (REDIS_URL set)
-→ Redis sessions (Upstash/Vercel KV)
-→ HTTPS-only cookies
-→ Cross-site cookie support
-```
+- **Development:** SQLite-backed sessions stored in `./data/sessions.db`
+- **Production:** Postgres (Supabase) session table managed via `connect-pg-simple`
+- Cookies are HTTP-only, `sameSite='lax'`, and marked `secure` in production
 
 ## 🎨 Event Features
 

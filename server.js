@@ -8,16 +8,19 @@ dotenv.config({ path: path.join(__dirname, '.env.local') });
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
+const { Pool } = require('pg');
 const fs = require('fs').promises;
 const multer = require('multer');
 const db = require('./database');
 const { requireAuth, requireRole } = require('./auth-middleware');
+const emailClient = require('./email');
+const pgSession = require('connect-pg-simple')(session);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'family-calendar-secret-change-in-production';
-const REDIS_URL = process.env.REDIS_URL || process.env.KV_URL; // Support both Upstash and Vercel KV
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.VERCEL;
+const POSTGRES_URL = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL;
 
 const MAX_BACKGROUND_BYTES = 1.5 * 1024 * 1024;
 
@@ -32,178 +35,195 @@ app.use(cors({
 app.use(express.json({ limit: '5mb' }));
 
 // Session configuration - Set up immediately for serverless
-let sessionConfigured = false;
-let redisClient = null;
-let isRedisConnected = false;
-let connectionPromise = null;
+let sessionMiddleware = null;
+let currentSessionLabel = null;
 
-try {
-    if (REDIS_URL) {
-        // Production: Use Redis (Vercel, Upstash, etc.)
-        console.log('🔴 Setting up Redis session store');
-        console.log('REDIS_URL present:', !!REDIS_URL);
-        console.log('IS_PRODUCTION:', IS_PRODUCTION);
-
-        const RedisStore = require('connect-redis').default;
-        const { createClient } = require('redis');
-
-        redisClient = createClient({
-            url: REDIS_URL,
-            socket: {
-                reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
-                tls: REDIS_URL.startsWith('rediss://'),
-                rejectUnauthorized: false // Accept self-signed certificates (Upstash)
-            }
-        });
-
-        redisClient.on('error', (err) => console.error('Redis Client Error', err));
-        redisClient.on('connect', () => {
-            isRedisConnected = true;
-            console.log('✅ Redis connected');
-        });
-        redisClient.on('ready', () => console.log('✅ Redis ready'));
-
-        // Connect Redis immediately
-        connectionPromise = redisClient.connect()
-            .then(() => {
-                isRedisConnected = true;
-                console.log('✅ Redis connection established');
-                return true;
-            })
-            .catch(err => {
-                console.error('❌ Redis connection failed:', err);
-                return false;
-            });
-
-        const store = new RedisStore({
-            client: redisClient,
-            ttl: 7 * 24 * 60 * 60, // 7 days in seconds
-            disableTouch: false,
-            disableTTL: false,
-            prefix: 'sess:'
-        });
-
-        // Debug Redis store operations
-        const originalGet = store.get.bind(store);
-        const originalSet = store.set.bind(store);
-
-        store.get = function(sid, callback) {
-            console.log('🔍 Redis GET session:', sid);
-            return originalGet(sid, (err, session) => {
-                console.log('🔍 Redis GET result:', { sid, hasSession: !!session, session, err });
-                callback(err, session);
-            });
-        };
-
-        store.set = function(sid, session, callback) {
-            console.log('💾 Redis SET session:', { sid, session });
-            return originalSet(sid, session, (err) => {
-                console.log('💾 Redis SET result:', { sid, err });
-                if (callback) callback(err);
-            });
-        };
-
-        app.use(session({
-            store: store,
-            secret: SESSION_SECRET,
-            resave: false,
-            saveUninitialized: false, // Changed back to false - only save when modified
-            rolling: true, // Refresh session on each request
-            cookie: {
-                secure: true, // Always true for HTTPS (Vercel always uses HTTPS)
-                httpOnly: true,
-                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-                sameSite: 'lax', // Changed from 'none' - same-site works better for same-domain
-                path: '/',
-                domain: undefined
-            },
-            name: 'connect.sid'
-        }));
-
-        console.log('✅ Session middleware configured with Redis');
-        sessionConfigured = true;
-    } else if (!IS_PRODUCTION) {
-        // Local development: Use SQLite
-        console.log('💾 Setting up SQLite session store');
-        const SQLiteStore = require('connect-sqlite3')(session);
-        const store = new SQLiteStore({
-            db: 'sessions.db',
-            dir: './data'
-        });
-
-        app.use(session({
-            store: store,
-            secret: SESSION_SECRET,
-            resave: false,
-            saveUninitialized: false,
-            cookie: {
-                secure: false,
-                httpOnly: true,
-                maxAge: 7 * 24 * 60 * 60 * 1000,
-                sameSite: 'lax'
-            }
-        }));
-        sessionConfigured = true;
-    } else {
-        // Production fallback: memory store (won't work well in serverless!)
-        console.warn('⚠️ Using memory session store - sessions may not persist!');
-
-        const sessionMiddleware = session({
-            secret: SESSION_SECRET,
-            resave: false,
-            saveUninitialized: true,
-            cookie: {
-                secure: IS_PRODUCTION,
-                httpOnly: true,
-                maxAge: 7 * 24 * 60 * 60 * 1000,
-                sameSite: 'lax',
-                path: '/'
-            },
-            name: 'connect.sid'
-        });
-
-        app.use(sessionMiddleware);
-        sessionConfigured = true;
+const configureSessionMiddleware = (middleware, label) => {
+    if (!middleware) {
+        return false;
     }
-} catch (error) {
-    console.error('❌ Failed to set up session store:', error);
-    console.error('Error details:', error.message);
-    console.error('Error stack:', error.stack);
+    sessionMiddleware = middleware;
+    currentSessionLabel = label;
+    console.log(`[session] Using ${label} session store`);
+    return true;
+};
 
-    // Fallback to memory store (sessions won't persist across requests)
-    console.log('⚠️  Falling back to memory session store');
-    app.use(session({
+const createPostgresSessionMiddleware = () => {
+    if (!POSTGRES_URL) {
+        console.warn('[session] POSTGRES_URL not set; cannot enable Postgres session store.');
+        return null;
+    }
+
+    const pool = new Pool({
+        connectionString: POSTGRES_URL,
+        ssl: POSTGRES_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined
+    });
+
+    return session({
+        store: new pgSession({
+            pool,
+            createTableIfMissing: true,
+            tableName: 'sessions',
+            schemaName: 'public'
+        }),
         secret: SESSION_SECRET,
         resave: false,
         saveUninitialized: false,
+        rolling: true,
         cookie: {
             secure: IS_PRODUCTION,
             httpOnly: true,
             maxAge: 7 * 24 * 60 * 60 * 1000,
-            sameSite: IS_PRODUCTION ? 'none' : 'lax'
-        }
-    }));
-    sessionConfigured = true;
+            sameSite: 'lax',
+            path: '/'
+        },
+        name: 'connect.sid'
+    });
+};
+
+const createDevelopmentSessionMiddleware = () => {
+    const SQLiteStore = require('connect-sqlite3')(session);
+    const store = new SQLiteStore({
+        db: 'sessions.db',
+        dir: './data'
+    });
+
+    return session({
+        store,
+        secret: SESSION_SECRET,
+        resave: false,
+        saveUninitialized: false,
+        rolling: true,
+        cookie: {
+            secure: false,
+            httpOnly: true,
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            sameSite: 'lax'
+        },
+        name: 'connect.sid'
+    });
+};
+
+const createProductionFallbackSessionMiddleware = () => session({
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+        secure: true,
+        httpOnly: true,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        sameSite: 'lax',
+        path: '/'
+    },
+    name: 'connect.sid'
+});
+
+// Prefer Postgres-backed sessions in production
+if (IS_PRODUCTION) {
+    configureSessionMiddleware(createPostgresSessionMiddleware(), 'Postgres (Supabase)');
 }
+
+// Use SQLite when developing locally
+if (!sessionMiddleware && !IS_PRODUCTION) {
+    configureSessionMiddleware(createDevelopmentSessionMiddleware(), 'SQLite (development)');
+}
+
+// Final fallback: in-memory (not recommended for production)
+if (!sessionMiddleware) {
+    configureSessionMiddleware(createProductionFallbackSessionMiddleware(), 'in-memory fallback');
+}
+
+app.use((req, res, next) => sessionMiddleware(req, res, next));
+
+const getInvitationFamilyId = (invitation, fallbackFamilyId = null) => {
+    return invitation?.familyId || invitation?.family_id || fallbackFamilyId || null;
+};
+
+const getInvitationInvitedById = (invitation, fallbackInvitedBy = null) => {
+    return invitation?.invitedById || invitation?.invitedBy || invitation?.invited_by || fallbackInvitedBy || null;
+};
+
+async function decorateInvitation(invitation) {
+    if (!invitation) {
+        return null;
+    }
+
+    const familyId = getInvitationFamilyId(invitation);
+    const invitedById = getInvitationInvitedById(invitation);
+
+    const [family, inviter] = await Promise.all([
+        familyId ? db.getFamilyById(familyId) : Promise.resolve(null),
+        invitedById ? db.getUserById(invitedById) : Promise.resolve(null)
+    ]);
+
+    return {
+        ...invitation,
+        familyId,
+        familyName: family?.name || null,
+        invitedBy: inviter?.name || inviter?.email || null,
+        invitedById
+    };
+}
+
+
+async function sendInvitationEmail(invitation, fallbackFamilyId, fallbackInviterId) {
+    if (!emailClient.isEmailConfigured()) {
+        return { sent: false, message: 'Gmail SMTP not configured.' };
+    }
+
+    try {
+        const familyId = getInvitationFamilyId(invitation, fallbackFamilyId);
+        const invitedById = getInvitationInvitedById(invitation, fallbackInviterId);
+
+        const [family, inviter] = await Promise.all([
+            familyId ? db.getFamilyById(familyId) : Promise.resolve(null),
+            invitedById ? db.getUserById(invitedById) : Promise.resolve(null)
+        ]);
+
+        const familyName = family?.name || 'your family';
+        const inviterName = inviter?.name || inviter?.email || 'Family Admin';
+        const baseUrl = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '';
+        const inviteLink = baseUrl
+            ? `${baseUrl.replace(/\/$/, '')}/login.html?invite=${invitation.id}`
+            : `Use the Family Calendar app and register with this email. Invitation ID: ${invitation.id}`;
+
+        const subject = `Invitation to join ${familyName} on Family Calendar`;
+        const text = [
+            `Hi ${invitation.email},`,
+            '',
+            `${inviterName} invited you to join ${familyName} on Family Calendar.`,
+            '',
+            baseUrl
+                ? `Open the link below to accept your invitation:\n${inviteLink}`
+                : inviteLink,
+            '',
+            `You were invited with the role: ${invitation.role}.`,
+            '',
+            'If you did not expect this email, feel free to ignore it.',
+            '',
+            'Family Calendar'
+        ].join('\n');
+
+        return await emailClient.sendEmail({
+            to: invitation.email,
+            subject,
+            text
+        });
+    } catch (error) {
+        console.error('[invite] Failed to send invitation email:', error);
+        return {
+            sent: false,
+            message: error?.message || 'Failed to send invitation email'
+        };
+    }
+}
+
+
 
 if (!SESSION_SECRET || SESSION_SECRET === 'family-calendar-secret-change-in-production') {
-    console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
+    console.warn('WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
 }
-
-// Middleware to ensure Redis is connected before processing requests
-app.use(async (req, res, next) => {
-    // If using Redis and not connected yet, wait for connection
-    if (REDIS_URL && connectionPromise && !isRedisConnected) {
-        console.log('⏳ Waiting for Redis connection...');
-        try {
-            await connectionPromise;
-            console.log('✅ Redis ready for request');
-        } catch (err) {
-            console.error('⚠️ Redis connection wait failed:', err);
-        }
-    }
-    next();
-});
 
 // Optional: Light request logging (can be removed in production)
 app.use((req, res, next) => {
@@ -242,10 +262,10 @@ app.get('/api/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         env: {
-            hasRedis: !!REDIS_URL,
             isProduction: IS_PRODUCTION,
             hasSessionSecret: !!SESSION_SECRET,
-            hasPostgresUrl: !!process.env.POSTGRES_URL
+            hasPostgresUrl: Boolean(POSTGRES_URL),
+            sessionStore: currentSessionLabel
         }
     });
 });
@@ -429,9 +449,15 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
         }
 
         const { password, ...userWithoutPassword } = user;
-        const family = await db.getFamilyById(user.familyId);
+        const familyId = user.familyId || user.family_id || req.session.familyId;
+        const family = familyId ? await db.getFamilyById(familyId) : null;
 
-        res.json({ user: userWithoutPassword, family });
+        const responseUser = {
+            ...userWithoutPassword,
+            familyId
+        };
+
+        res.json({ user: responseUser, family });
     } catch (error) {
         console.error('Get user error:', error);
         res.status(500).json({ error: 'Failed to get user' });
@@ -460,10 +486,17 @@ app.post('/api/family/invite', requireRole('admin'), async (req, res) => {
             return res.status(400).json({ error: 'Email is required' });
         }
 
+        console.log('[invite] Admin request', {
+            invitedBy: req.session.userId,
+            familyId: req.session.familyId,
+            email,
+            role: role || 'adult'
+        });
+
         // Check if user already exists
         const existingUser = await db.getUserByEmail(email);
-        if (existingUser) {
-            return res.status(400).json({ error: 'User already exists' });
+        if (existingUser && (existingUser.family_id === req.session.familyId || existingUser.familyId === req.session.familyId)) {
+            return res.status(400).json({ error: 'User is already a member of this family' });
         }
 
         const invitation = await db.createInvitation({
@@ -473,7 +506,27 @@ app.post('/api/family/invite', requireRole('admin'), async (req, res) => {
             role: role || 'adult'
         });
 
-        res.status(201).json(invitation);
+        console.log('[invite] Invitation created', {
+            invitationId: invitation.id,
+            email: invitation.email,
+            role: invitation.role,
+            status: invitation.status,
+            expiresAt: invitation.expiresAt
+        });
+
+        const emailResult = await sendInvitationEmail(invitation, req.session.familyId, req.session.userId);
+
+        if (!emailResult.sent) {
+            console.log('[invite] Invitation email not sent:', emailResult.message);
+        }
+
+        const invitationResponse = await decorateInvitation(invitation);
+
+        res.status(201).json({
+            invitation: invitationResponse,
+            emailSent: emailResult.sent,
+            emailMessage: emailResult.message
+        });
     } catch (error) {
         console.error('Invitation error:', error);
         res.status(500).json({ error: error.message || 'Failed to create invitation' });
@@ -484,10 +537,145 @@ app.post('/api/family/invite', requireRole('admin'), async (req, res) => {
 app.get('/api/family/invitations', requireRole('admin'), async (req, res) => {
     try {
         const invitations = await db.getFamilyInvitations(req.session.familyId);
-        res.json(invitations);
+        const decorated = await Promise.all(invitations.map(decorateInvitation));
+        res.json(decorated);
     } catch (error) {
         console.error('Get invitations error:', error);
         res.status(500).json({ error: 'Failed to get invitations' });
+    }
+});
+
+app.delete('/api/family/invitations/:id', requireRole('admin'), async (req, res) => {
+    try {
+        const invitationId = req.params.id;
+        const invitation = await db.getInvitationById(invitationId);
+        if (!invitation || invitation.family_id !== req.session.familyId) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        if (invitation.status === 'accepted') {
+            return res.status(400).json({ error: 'Cannot cancel an accepted invitation' });
+        }
+
+        const cancelled = await db.cancelInvitation(invitationId, req.session.familyId);
+
+        if (!cancelled) {
+            return res.status(404).json({ error: 'Invitation not found or already cancelled' });
+        }
+
+        console.log('[invite] Invitation cancelled', {
+            invitationId,
+            cancelledBy: req.session.userId
+        });
+
+        const invitationResponse = await decorateInvitation(cancelled);
+
+        res.json({ invitation: invitationResponse });
+    } catch (error) {
+        console.error('Cancel invitation error:', error);
+        res.status(500).json({ error: 'Failed to cancel invitation' });
+    }
+});
+
+app.post('/api/family/invitations/:id/resend', requireRole('admin'), async (req, res) => {
+    try {
+        const invitationId = req.params.id;
+        const invitation = await db.getInvitationById(invitationId);
+        if (!invitation || invitation.family_id !== req.session.familyId) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        if (invitation.status === 'accepted') {
+            return res.status(400).json({ error: 'Cannot resend an accepted invitation' });
+        }
+
+        const updatedInvitation = await db.resendInvitation(invitationId, req.session.familyId, req.session.userId);
+
+        if (!updatedInvitation) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        console.log('[invite] Invitation resend requested', {
+            invitationId,
+            requestedBy: req.session.userId
+        });
+
+        const emailResult = await sendInvitationEmail(updatedInvitation, req.session.familyId, req.session.userId);
+
+        if (!emailResult.sent) {
+            console.log('[invite] Invitation resend email not sent:', emailResult.message);
+        }
+
+        const invitationResponse = await decorateInvitation(updatedInvitation);
+
+        res.json({
+            invitation: invitationResponse,
+            emailSent: emailResult.sent,
+            emailMessage: emailResult.message
+        });
+    } catch (error) {
+        console.error('Resend invitation error:', error);
+        res.status(500).json({ error: 'Failed to resend invitation' });
+    }
+});
+
+// Admin session log
+app.get('/api/admin/sessions', requireRole('admin'), async (req, res) => {
+    try {
+        const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
+        const sessions = await db.getActiveSessions({
+            limit,
+            familyId: req.session.familyId
+        });
+        res.json({
+            limit,
+            count: sessions.length,
+            sessions
+        });
+    } catch (error) {
+        console.error('Session log error:', error);
+        res.status(500).json({ error: 'Failed to load session log' });
+    }
+});
+
+// Test email trigger (logs message, no actual email is sent without SMTP integration)
+app.post('/api/admin/test-email', requireRole('admin'), async (req, res) => {
+    try {
+        const targetEmail = req.body?.email || req.body?.targetEmail;
+        let fallbackEmail = null;
+        if (!targetEmail && req.session?.userId) {
+            const requester = await db.getUserById(req.session.userId);
+            fallbackEmail = requester?.email;
+        }
+
+        const destination = targetEmail || fallbackEmail || process.env.GMAIL_TEST_EMAIL || process.env.GMAIL_USER || 'admin@example.com';
+        const subject = 'Family Calendar Test Email';
+        const timestamp = new Date().toISOString();
+        const text = [
+            'Hello from Family Calendar!',
+            '',
+            `This is a test email generated at ${timestamp}.`,
+            '',
+            'If you received this email, Gmail SMTP delivery is working correctly.',
+            '',
+            '— Family Calendar'
+        ].join('\n');
+
+        const emailResult = await emailClient.sendEmail({
+            to: destination,
+            subject,
+            text
+        });
+
+        res.json({
+            success: emailResult.sent,
+            message: emailResult.message,
+            targetEmail: destination,
+            emailConfigured: emailClient.isEmailConfigured()
+        });
+    } catch (error) {
+        console.error('Test email error:', error);
+        res.status(500).json({ error: 'Failed to generate test email' });
     }
 });
 
@@ -495,7 +683,8 @@ app.get('/api/family/invitations', requireRole('admin'), async (req, res) => {
 app.get('/api/invitations/:email', async (req, res) => {
     try {
         const invitations = await db.getInvitationsByEmail(req.params.email);
-        res.json(invitations);
+        const decorated = await Promise.all(invitations.map(decorateInvitation));
+        res.json(decorated);
     } catch (error) {
         console.error('Get invitations error:', error);
         res.status(500).json({ error: 'Failed to get invitations' });
@@ -522,29 +711,41 @@ app.post('/api/invitations/:id/accept', async (req, res) => {
             return res.status(400).json({ error: 'Invitation already processed' });
         }
 
-        // Check if invitation has expired
-        if (new Date(invitation.expiresAt) < new Date()) {
+        const expiresAt = invitation.expiresAt || invitation.expires_at;
+        if (expiresAt && new Date(expiresAt) < new Date()) {
             return res.status(400).json({ error: 'Invitation has expired' });
         }
 
-        // Create user
-        const user = await db.createUser({
-            email: invitation.email,
-            password,
-            name,
-            role: invitation.role,
-            familyId: invitation.familyId
-        });
+        const familyId = getInvitationFamilyId(invitation);
+        if (!familyId) {
+            return res.status(400).json({ error: 'Invitation is missing family information' });
+        }
 
-        // Update invitation status
+        let user = await db.getUserByEmail(invitation.email);
+        if (user) {
+            user = await db.updateUserForInvitation(user.id, {
+                password,
+                name,
+                role: invitation.role,
+                familyId
+            });
+        } else {
+            user = await db.createUser({
+                email: invitation.email,
+                password,
+                name,
+                role: invitation.role,
+                familyId
+            });
+        }
+
         await db.updateInvitationStatus(invitationId, 'accepted');
 
-        // Set session
         req.session.userId = user.id;
         req.session.userRole = user.role;
-        req.session.familyId = user.familyId;
+        req.session.familyId = familyId;
 
-        const family = await db.getFamilyById(user.familyId);
+        const family = await db.getFamilyById(familyId);
 
         res.status(201).json({ user, family });
     } catch (error) {
@@ -1077,7 +1278,7 @@ async function startServer() {
         console.log('🚀 Starting Family Calendar server...');
         console.log('Environment:', process.env.NODE_ENV || 'development');
         console.log('Has POSTGRES_URL:', !!process.env.POSTGRES_URL);
-        console.log('Has REDIS_URL:', !!process.env.REDIS_URL);
+        console.log('Session store:', currentSessionLabel || 'unknown');
 
         // Initialize database (don't fail if it errors - tables might exist)
         console.log('🗄️  Initializing database...');
@@ -1116,3 +1317,6 @@ if (IS_PRODUCTION) {
     // Start normally for local development
     startServer();
 }
+
+
+

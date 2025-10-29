@@ -277,6 +277,65 @@ async function updateInvitationStatus(id, status) {
     return await getInvitationById(id);
 }
 
+async function updateUserForInvitation(userId, { password, name, role, familyId }) {
+    const updates = [];
+    const params = [];
+    let index = 1;
+
+    if (name) {
+        updates.push(`name = $${index++}`);
+        params.push(name);
+    }
+
+    if (role) {
+        updates.push(`role = $${index++}`);
+        params.push(role);
+    }
+
+    if (familyId) {
+        updates.push(`family_id = $${index++}`);
+        params.push(familyId);
+    }
+
+    if (password) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        updates.push(`password = $${index++}`);
+        params.push(hashedPassword);
+    }
+
+    if (updates.length === 0) {
+        return await getUserById(userId);
+    }
+
+    updates.push('updated_at = NOW()');
+
+    params.push(userId);
+
+    await query(
+        `UPDATE users SET ${updates.join(', ')} WHERE id = $${index}`,
+        params
+    );
+
+    return await getUserById(userId);
+}
+
+async function cancelInvitation(invitationId, familyId) {
+    const result = await query(
+        'UPDATE invitations SET status = $1, updated_at = NOW() WHERE id = $2 AND family_id = $3 RETURNING *',
+        ['cancelled', invitationId, familyId]
+    );
+    return result.rows[0] || null;
+}
+
+async function resendInvitation(invitationId, familyId, invitedBy) {
+    const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const result = await query(
+        'UPDATE invitations SET status = $1, invited_by = $2, expires_at = $3, updated_at = NOW() WHERE id = $4 AND family_id = $5 RETURNING *',
+        ['pending', invitedBy, newExpiry, invitationId, familyId]
+    );
+    return result.rows[0] || null;
+}
+
 async function getFamilyInvitations(familyId) {
     const result = await query(
         'SELECT * FROM invitations WHERE family_id = $1 ORDER BY created_at DESC',
@@ -556,6 +615,61 @@ async function deleteDayBackground(familyId, date) {
     await query('DELETE FROM day_backgrounds WHERE family_id = $1 AND date = $2', [familyId, date]);
 }
 
+async function getActiveSessions({ limit = 100, familyId } = {}) {
+    const numericLimit = Number(limit) || 100;
+    const boundedLimit = Math.max(1, Math.min(500, numericLimit));
+    const params = [boundedLimit];
+    let familyFilterClause = '';
+    if (familyId) {
+        params.push(familyId);
+        familyFilterClause = 'WHERE s.sess #>> \'{familyId}\' = $2';
+    }
+
+    const result = await query(`
+        SELECT
+            s.sid,
+            s.expire,
+            s.sess,
+            s.sess #>> '{userId}' AS user_id,
+            s.sess #>> '{userRole}' AS user_role,
+            s.sess #>> '{familyId}' AS family_id,
+            u.email,
+            u.name
+        FROM sessions s
+        LEFT JOIN users u ON u.id = s.sess #>> '{userId}'
+        ${familyFilterClause}
+        ORDER BY s.expire DESC
+        LIMIT $1
+    `, params);
+
+    return result.rows.map(row => {
+        const sessionData = row.sess || {};
+        const cookie = sessionData.cookie || {};
+        const expiresAt = row.expire instanceof Date ? row.expire.toISOString() : row.expire;
+        const maxAge = typeof cookie.originalMaxAge === 'number'
+            ? cookie.originalMaxAge
+            : (cookie.maxAge ?? null);
+
+        return {
+            sid: row.sid,
+            userId: sessionData.userId || row.user_id || null,
+            userRole: sessionData.userRole || row.user_role || null,
+            familyId: sessionData.familyId || row.family_id || null,
+            userEmail: row.email || null,
+            userName: row.name || null,
+            expiresAt,
+            isExpired: expiresAt ? new Date(expiresAt) < new Date() : null,
+            cookie: {
+                secure: Boolean(cookie.secure),
+                httpOnly: Boolean(cookie.httpOnly),
+                sameSite: cookie.sameSite || null,
+                maxAge
+            },
+            sessionData
+        };
+    });
+}
+
 module.exports = {
     initializeDB,
     createUser,
@@ -571,6 +685,9 @@ module.exports = {
     getInvitationById,
     getInvitationsByEmail,
     updateInvitationStatus,
+    updateUserForInvitation,
+    cancelInvitation,
+    resendInvitation,
     getFamilyInvitations,
     // Event operations
     createEvent,
@@ -582,5 +699,6 @@ module.exports = {
     bulkCreateEvents,
     setDayBackground,
     getDayBackgroundsByFamily,
-    deleteDayBackground
+    deleteDayBackground,
+    getActiveSessions
 };

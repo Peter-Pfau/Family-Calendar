@@ -312,9 +312,9 @@
                     invitationList.style.display = 'block';
                     invitationsContainer.innerHTML = invitations.map(inv => `
                         <div class="invitation-item" data-invitation-id="${inv.id}">
-                            <p><strong>Family:</strong> ${inv.familyId}</p>
+                            <p><strong>Family:</strong> ${inv.familyName || inv.familyId}</p>
                             <p><strong>Role:</strong> ${inv.role}</p>
-                            <p><strong>Invited by:</strong> ${inv.invitedBy}</p>
+                            <p><strong>Invited by:</strong> ${inv.invitedBy || 'Family Admin'}</p>
                         </div>
                     `).join('');
 
@@ -444,3 +444,4 @@
     </script>
 </body>
 </html>
+
