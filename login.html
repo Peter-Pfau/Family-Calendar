@@ -269,28 +269,39 @@
         // Tab switching
         const tabs = document.querySelectorAll('.tab');
         const forms = document.querySelectorAll('.form-container');
+        const urlParams = new URLSearchParams(window.location.search);
+
+        function setActiveTab(tabName) {
+            const normalizedTab = tabName === 'register' ? 'register' : 'login';
+
+            hideAlert();
+
+            tabs.forEach(tab => {
+                const isActive = tab.dataset.tab === normalizedTab;
+                tab.classList.toggle('active', isActive);
+            });
+
+            forms.forEach(form => {
+                const isActive = form.id === `${normalizedTab}-form`;
+                form.classList.toggle('active', isActive);
+            });
+
+            if (normalizedTab === 'register') {
+                const emailInput = document.getElementById('register-email');
+                if (emailInput && emailInput.value) {
+                    checkInvitations(emailInput.value);
+                }
+            }
+        }
 
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                const tabName = tab.dataset.tab;
-
-                tabs.forEach(t => t.classList.remove('active'));
-                forms.forEach(f => f.classList.remove('active'));
-
-                tab.classList.add('active');
-                document.getElementById(`${tabName}-form`).classList.add('active');
-
-                hideAlert();
-
-                // Check for invitations when switching to register tab
-                if (tabName === 'register') {
-                    const email = document.getElementById('register-email').value;
-                    if (email) {
-                        checkInvitations(email);
-                    }
-                }
+                setActiveTab(tab.dataset.tab);
             });
         });
+
+        const initialTab = urlParams.has('invite') || urlParams.has('invitation') ? 'register' : 'login';
+        setActiveTab(initialTab);
 
         // Check for invitations
         document.getElementById('register-email').addEventListener('blur', async (e) => {
@@ -430,6 +441,55 @@
                 showAlert('Network error. Please try again.', 'error');
             }
         });
+
+        async function handleInvitationFromLink() {
+            const inviteId = urlParams.get('invite') || urlParams.get('invitation') || null;
+
+            if (!inviteId) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/invitations/id/${encodeURIComponent(inviteId)}`);
+                if (!response.ok) {
+                    const errorBody = await response.json().catch(() => ({}));
+                    const message = errorBody?.error || 'Invitation link is invalid or has expired.';
+                    showAlert(message, 'error');
+                    return;
+                }
+
+                const invitation = await response.json();
+
+                // Pre-fill email and invitation details
+                const emailInput = document.getElementById('register-email');
+                emailInput.value = invitation.email;
+                emailInput.setAttribute('readonly', 'readonly');
+
+                document.getElementById('invitation-id').value = invitation.id;
+
+                setActiveTab('register');
+
+                // Render invitation details explicitly
+                const invitationList = document.getElementById('invitation-list');
+                const invitationsContainer = document.getElementById('invitations');
+
+                invitationList.style.display = 'block';
+                invitationsContainer.innerHTML = `
+                    <div class="invitation-item" data-invitation-id="${invitation.id}" style="border-color: #667eea;">
+                        <p><strong>Family:</strong> ${invitation.familyName || invitation.familyId}</p>
+                        <p><strong>Role:</strong> ${invitation.role}</p>
+                        <p><strong>Invited by:</strong> ${invitation.invitedBy || 'Family Admin'}</p>
+                    </div>
+                `;
+
+                showAlert('Invitation found! Complete the form to join your family.', 'success');
+            } catch (error) {
+                console.error('Failed to resolve invitation link:', error);
+                showAlert('Unable to load invitation details. Please request a new link.', 'error');
+            }
+        }
+
+        handleInvitationFromLink();
 
         function showAlert(message, type) {
             const alert = document.getElementById('alert');

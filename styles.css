@@ -36,6 +36,19 @@ body {
     font-weight: 600;
 }
 
+.header-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.family-name {
+    display: none;
+    color: #4a5568;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
 .header-controls {
     display: flex;
     align-items: center;
@@ -528,6 +541,14 @@ body {
         flex-direction: column;
         text-align: center;
     }
+
+    .header-info {
+        align-items: center;
+    }
+
+    .family-name {
+        text-align: center;
+    }
     
     .header-controls {
         order: 2;
@@ -690,6 +711,59 @@ body {
     .menu-text {
         font-size: 13px;
     }
+}
+
+/* Profile Modal */
+.profile-modal-content {
+    max-width: 480px;
+    width: 90%;
+    border-radius: 14px;
+}
+
+.profile-details {
+    padding: 10px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.profile-section {
+    background: #f9fafb;
+    border: 1px solid #edf2f7;
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.profile-section h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+    color: #2d3748;
+}
+
+.profile-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    color: #4a5568;
+    padding: 6px 0;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.profile-row:last-child {
+    border-bottom: none;
+}
+
+.profile-row span:first-child {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.profile-actions .secondary-btn {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    font-size: 15px;
 }
 
 /* Schedules Modal */

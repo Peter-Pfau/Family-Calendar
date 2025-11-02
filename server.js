@@ -184,8 +184,9 @@ async function sendInvitationEmail(invitation, fallbackFamilyId, fallbackInviter
         const familyName = family?.name || 'your family';
         const inviterName = inviter?.name || inviter?.email || 'Family Admin';
         const baseUrl = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '';
+        const inviteIdParam = encodeURIComponent(invitation.id);
         const inviteLink = baseUrl
-            ? `${baseUrl.replace(/\/$/, '')}/login.html?invite=${invitation.id}`
+            ? `${baseUrl.replace(/\/$/, '')}/login.html?invite=${inviteIdParam}`
             : `Use the Family Calendar app and register with this email. Invitation ID: ${invitation.id}`;
 
         const subject = `Invitation to join ${familyName} on Family Calendar`;
@@ -205,10 +206,44 @@ async function sendInvitationEmail(invitation, fallbackFamilyId, fallbackInviter
             'Family Calendar'
         ].join('\n');
 
+        const html = baseUrl
+            ? `
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background-color:#f5f5f5;font-family:Arial,sans-serif;color:#1a202c;">
+    <div style="max-width:560px;margin:24px auto;padding:24px;background-color:#ffffff;border-radius:12px;border:1px solid #e2e8f0;">
+        <h2 style="margin:0 0 16px;font-size:20px;font-weight:600;color:#1a202c;">You've been invited to ${familyName}</h2>
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#2d3748;">
+            ${inviterName} invited you to join <strong>${familyName}</strong> on Family Calendar.
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0;">
+            <tr>
+                <td align="center">
+                    <a href="${inviteLink}"
+                       style="display:inline-block;padding:12px 28px;border-radius:9999px;background-color:#4c51bf;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;">
+                        Accept Invitation
+                    </a>
+                </td>
+            </tr>
+        </table>
+        <p style="margin:0 0 16px;font-size:14px;line-height:1.6;color:#4a5568;">
+            If the button above does not work, copy and paste this link into your browser:<br>
+            <a href="${inviteLink}" style="color:#4c51bf;word-break:break-all;">${inviteLink}</a>
+        </p>
+        <p style="margin:0 0 8px;font-size:14px;color:#2d3748;">You were invited with the role: <strong>${invitation.role}</strong>.</p>
+        <p style="margin:0;font-size:13px;color:#718096;">If you were not expecting this invitation, you can safely ignore this email.</p>
+    </div>
+    <p style="text-align:center;font-size:12px;color:#a0aec0;margin:16px 0;">Family Calendar</p>
+</body>
+</html>
+            `.trim()
+            : text.replace(/\n/g, '<br>');
+
         return await emailClient.sendEmail({
             to: invitation.email,
             subject,
-            text
+            text,
+            html
         });
     } catch (error) {
         console.error('[invite] Failed to send invitation email:', error);
@@ -347,7 +382,8 @@ app.post('/api/auth/register', async (req, res) => {
         if (req.session) {
             req.session.userId = user.id;
             req.session.userRole = user.role;
-            req.session.familyId = user.familyId;
+        const sessionFamilyId = user.familyId || user.family_id || family?.id || null;
+        req.session.familyId = sessionFamilyId ? String(sessionFamilyId).trim() : null;
 
             // Explicitly save session before responding
             await new Promise((resolve, reject) => {
@@ -390,7 +426,8 @@ app.post('/api/auth/login', async (req, res) => {
             console.log('Before setting session - sessionID:', req.sessionID);
             req.session.userId = user.id;
             req.session.userRole = user.role;
-            req.session.familyId = user.familyId || user.family_id;
+            const userFamilyId = user.familyId || user.family_id || null;
+            req.session.familyId = userFamilyId ? String(userFamilyId).trim() : null;
 
             console.log('After setting session data:', {
                 sessionID: req.sessionID,
@@ -691,6 +728,22 @@ app.get('/api/invitations/:email', async (req, res) => {
     }
 });
 
+// Get invitation details by ID (used for invite links)
+app.get('/api/invitations/id/:id', async (req, res) => {
+    try {
+        const invitation = await db.getInvitationById(req.params.id);
+        if (!invitation) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        const decorated = await decorateInvitation(invitation);
+        res.json(decorated);
+    } catch (error) {
+        console.error('Get invitation by ID error:', error);
+        res.status(500).json({ error: 'Failed to load invitation details' });
+    }
+});
+
 // Accept invitation and register
 app.post('/api/invitations/:id/accept', async (req, res) => {
     try {
@@ -743,7 +796,7 @@ app.post('/api/invitations/:id/accept', async (req, res) => {
 
         req.session.userId = user.id;
         req.session.userRole = user.role;
-        req.session.familyId = familyId;
+        req.session.familyId = familyId ? String(familyId).trim() : null;
 
         const family = await db.getFamilyById(familyId);
 
@@ -760,19 +813,59 @@ app.put('/api/family/members/:id/role', requireRole('admin'), async (req, res) =
         const { role } = req.body;
         const userId = req.params.id;
 
+        if (!req.session.familyId) {
+            const currentUser = await db.getUserById(req.session.userId);
+            if (currentUser?.family_id) {
+                req.session.familyId = String(currentUser.family_id).trim();
+            }
+        }
+
+        const sessionFamilyId = req.session.familyId ? String(req.session.familyId).trim() : '';
+        const normalizedUserId = String(userId).trim();
+
         if (!['admin', 'adult', 'child'].includes(role)) {
             return res.status(400).json({ error: 'Invalid role' });
         }
 
-        const user = await db.getUserById(userId);
+        const familyMembers = sessionFamilyId ? await db.getFamilyMembers(sessionFamilyId) : [];
+        let targetMember = familyMembers.find((member) => String(member.id).trim() === normalizedUserId);
 
-        if (!user || user.familyId !== req.session.familyId) {
+        if (!targetMember) {
+            const user = await db.getUserById(userId);
+            const userFamilyId = user?.familyId || user?.family_id || null;
+            if (user && userFamilyId && sessionFamilyId && String(userFamilyId).trim() === sessionFamilyId) {
+                targetMember = {
+                    id: user.id,
+                    role: user.role,
+                    email: user.email,
+                    name: user.name
+                };
+                familyMembers.push({
+                    id: targetMember.id,
+                    role: targetMember.role
+                });
+            }
+        }
+
+        if (!targetMember) {
             return res.status(404).json({ error: 'User not found' });
         }
 
         // Don't allow changing own role
         if (userId === req.session.userId) {
             return res.status(400).json({ error: 'Cannot change your own role' });
+        }
+
+        if (targetMember.role === 'admin' && role !== 'admin') {
+            const adminCount = familyMembers.filter((member) => member.role === 'admin').length;
+            if (adminCount <= 1) {
+                return res.status(400).json({ error: 'Family must have at least one admin' });
+            }
+        }
+
+        const user = await db.getUserById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
         }
 
         const updatedUser = await db.updateUser(userId, { role });
@@ -789,15 +882,56 @@ app.delete('/api/family/members/:id', requireRole('admin'), async (req, res) => 
     try {
         const userId = req.params.id;
 
-        const user = await db.getUserById(userId);
+        if (!req.session.familyId) {
+            const currentUser = await db.getUserById(req.session.userId);
+            if (currentUser?.family_id) {
+                req.session.familyId = String(currentUser.family_id).trim();
+            }
+        }
 
-        if (!user || user.familyId !== req.session.familyId) {
+        const sessionFamilyId = req.session.familyId ? String(req.session.familyId).trim() : '';
+        const normalizedUserId = String(userId).trim();
+
+        const familyMembers = sessionFamilyId ? await db.getFamilyMembers(sessionFamilyId) : [];
+        let targetMember = familyMembers.find((member) => String(member.id).trim() === normalizedUserId);
+
+        if (!targetMember) {
+            const user = await db.getUserById(userId);
+            const userFamilyId = user?.familyId || user?.family_id || null;
+            if (user && userFamilyId && sessionFamilyId && String(userFamilyId).trim() === sessionFamilyId) {
+                targetMember = {
+                    id: user.id,
+                    role: user.role,
+                    email: user.email,
+                    name: user.name
+                };
+                familyMembers.push({
+                    id: targetMember.id,
+                    role: targetMember.role
+                });
+            }
+        }
+
+        if (!targetMember) {
             return res.status(404).json({ error: 'User not found' });
         }
 
         // Don't allow deleting own account
         if (userId === req.session.userId) {
             return res.status(400).json({ error: 'Cannot delete your own account' });
+        }
+
+        if (targetMember.role === 'admin') {
+            const adminCount = familyMembers.filter((member) => member.role === 'admin').length;
+            if (adminCount <= 1) {
+                return res.status(400).json({ error: 'Family must have at least one admin' });
+            }
+        }
+
+        const user = await db.getUserById(userId);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
         }
 
         await db.deleteUser(userId);

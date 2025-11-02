@@ -133,6 +133,25 @@ async function initializeDB() {
 }
 
 // User operations
+function enrichUserRow(row) {
+    if (!row) {
+        return null;
+    }
+
+    const familyId = row.family_id ?? row.familyId ?? null;
+    const familyName = row.family_name ?? row.familyName ?? null;
+
+    return {
+        ...row,
+        familyId,
+        familyName
+    };
+}
+
+function enrichUserRows(rows = []) {
+    return rows.map(enrichUserRow);
+}
+
 async function createUser(userData) {
     // Check if user already exists
     const existingUser = await getUserByEmail(userData.email);
@@ -156,13 +175,27 @@ async function createUser(userData) {
 }
 
 async function getUserByEmail(email) {
-    const result = await query('SELECT * FROM users WHERE email = $1 LIMIT 1', [email]);
-    return result.rows[0] || null;
+    const result = await query(
+        `SELECT u.*, f.name AS family_name
+         FROM users u
+         LEFT JOIN families f ON f.id = u.family_id
+         WHERE u.email = $1
+         LIMIT 1`,
+        [email]
+    );
+    return enrichUserRow(result.rows[0] || null);
 }
 
 async function getUserById(id) {
-    const result = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
-    return result.rows[0] || null;
+    const result = await query(
+        `SELECT u.*, f.name AS family_name
+         FROM users u
+         LEFT JOIN families f ON f.id = u.family_id
+         WHERE u.id = $1
+         LIMIT 1`,
+        [id]
+    );
+    return enrichUserRow(result.rows[0] || null);
 }
 
 async function updateUser(id, updates) {
@@ -230,10 +263,21 @@ async function getFamilyById(id) {
 
 async function getFamilyMembers(familyId) {
     const result = await query(
-        'SELECT id, email, name, role, family_id, created_at, updated_at FROM users WHERE family_id = $1 ORDER BY created_at ASC',
+        `SELECT u.id,
+                u.email,
+                u.name,
+                u.role,
+                u.family_id,
+                u.created_at,
+                u.updated_at,
+                f.name AS family_name
+         FROM users u
+         LEFT JOIN families f ON f.id = u.family_id
+         WHERE u.family_id = $1
+         ORDER BY u.created_at ASC`,
         [familyId]
     );
-    return result.rows;
+    return enrichUserRows(result.rows);
 }
 
 // Invitation operations

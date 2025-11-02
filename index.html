@@ -9,7 +9,10 @@
 <body>
     <div class="container">
         <header class="header">
-            <h1>Family Calendar</h1>
+            <div class="header-info">
+                <h1>Family Calendar</h1>
+                <p id="current-family-name" class="family-name"></p>
+            </div>
             <div class="header-controls">
                 <button id="prev-month" class="nav-btn">&lt;</button>
                 <span id="current-month-year"></span>
@@ -1115,6 +1118,10 @@
                 <div class="kebab-dot"></div>
             </button>
             <div id="kebab-menu" class="kebab-menu">
+                <div class="menu-item" id="profile-menu-item">
+                    <span class="menu-icon">👤</span>
+                    <span class="menu-text">Profile</span>
+                </div>
                 <div class="menu-item" id="schedules-menu-item">
                     <span class="menu-icon">📅</span>
                     <span class="menu-text">Schedules</span>
@@ -1127,6 +1134,16 @@
                     <span class="menu-icon">⚙️</span>
                     <span class="menu-text">Settings</span>
                 </div>
+            </div>
+        </div>
+
+        <div id="profile-modal" class="modal">
+            <div class="modal-content profile-modal-content">
+                <div class="modal-header">
+                    <h2>👤 Profile</h2>
+                    <span class="close" id="close-profile-modal">&times;</span>
+                </div>
+                <div id="profile-details" class="profile-details"></div>
             </div>
         </div>
     </div>

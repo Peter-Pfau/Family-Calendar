@@ -35,6 +35,17 @@ class FamilyCalendar {
             this.currentUser = data.user;
             this.currentFamily = data.family;
 
+            if ((!this.currentFamily || !this.currentFamily.id) && this.currentUser) {
+                const fallbackFamilyId = this.currentUser.familyId || this.currentUser.family_id || null;
+                const fallbackFamilyName = this.currentUser.familyName || this.currentUser.family_name || null;
+                if (fallbackFamilyId || fallbackFamilyName) {
+                    this.currentFamily = {
+                        id: fallbackFamilyId,
+                        name: fallbackFamilyName
+                    };
+                }
+            }
+
             // Update UI with user info
             this.updateUserUI();
 
@@ -50,6 +61,28 @@ class FamilyCalendar {
     updateUserUI() {
         // Add user info to header
         const header = document.querySelector('.header');
+        const familyNameDisplay = document.getElementById('current-family-name');
+        const activeFamilyName = [
+            this.currentFamily?.name,
+            this.currentFamily?.familyName,
+            this.currentFamily?.family_name,
+            this.currentUser?.familyName,
+            this.currentUser?.family_name
+        ].find((value) => value && String(value).trim().length > 0) || '';
+
+        if (familyNameDisplay) {
+            const nameText = activeFamilyName || 'Unknown';
+            familyNameDisplay.textContent = `Family: ${nameText}`;
+            familyNameDisplay.style.display = 'block';
+        }
+
+        if (header) {
+            const existingInfo = header.querySelector('.user-info');
+            if (existingInfo) {
+                existingInfo.remove();
+            }
+        }
+
         if (header && this.currentUser) {
             const userInfo = document.createElement('div');
             userInfo.className = 'user-info';
@@ -58,9 +91,6 @@ class FamilyCalendar {
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <span style="font-size: 14px; color: #666;">
                         ${this.currentUser.name} (${this.currentUser.role})
-                    </span>
-                    <span style="font-size: 12px; color: #999;">
-                        Member ID: ${this.currentUser.id} - Family ID: ${this.currentFamily?.id || 'N/A'}
                     </span>
                 </div>
                 <button id="logout-btn" class="secondary-btn" style="padding: 6px 12px;">Logout</button>
@@ -357,34 +387,64 @@ class FamilyCalendar {
                 credentials: 'include'
             });
             const members = await membersResponse.json();
+            const currentUserId = this.currentUser?.id;
+            const adminCount = members.filter((member) => member.role === 'admin').length;
 
             const membersList = document.getElementById('family-members-list');
-            membersList.innerHTML = members.map(member => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px;">
-                    <div>
-                        <strong>${member.name}</strong>
-                        <span style="color: #666; font-size: 13px; margin-left: 10px;">${member.email}</span>
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        ${member.id === this.currentUser.id ?
-                            `<span style="color: #667eea; font-weight: 600;">${member.role} (You)</span>` :
-                            `<select data-user-id="${member.id}" class="role-select" style="padding: 4px 8px;">
+            membersList.innerHTML = members.map(member => {
+                const memberName = member.name || 'Unnamed Member';
+                const memberEmail = member.email || 'No email provided';
+                const memberFamilyName = member.familyName || member.family_name || '';
+                const isSelf = currentUserId && member.id === currentUserId;
+                const isLastAdmin = member.role === 'admin' && adminCount <= 1;
+
+                const managementControls = isSelf
+                    ? `<span style="color: #667eea; font-weight: 600;">${member.role} (You)</span>`
+                    : `<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+                            <select data-user-id="${member.id}" class="member-role-select" ${isLastAdmin ? 'disabled' : ''} style="padding: 4px 8px;">
                                 <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
                                 <option value="adult" ${member.role === 'adult' ? 'selected' : ''}>Adult</option>
                                 <option value="child" ${member.role === 'child' ? 'selected' : ''}>Child</option>
                             </select>
-                            <button class="danger-btn" onclick="familyCalendar.removeMember('${member.id}')" style="padding: 4px 12px; font-size: 13px;">Remove</button>`
-                        }
+                            <button class="danger-btn member-remove-btn" data-user-id="${member.id}" ${isLastAdmin ? 'disabled title="Family must have at least one admin"' : ''} style="padding: 4px 12px; font-size: 13px;">Remove</button>
+                        </div>
+                        ${isLastAdmin ? '<div style="color: #c53030; font-size: 12px;">Cannot modify or remove the only admin.</div>' : ''}`;
+
+                return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px;">
+                        <div>
+                            <strong>${memberName}</strong>
+                            <div style="color: #666; font-size: 13px; margin-top: 4px;">${memberEmail}</div>
+                            ${memberFamilyName ? `<div style="color: #4a5568; font-size: 12px; margin-top: 2px;">Family: ${memberFamilyName}</div>` : ''}
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end;">
+                            ${managementControls}
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
 
             // Role change listeners
-            document.querySelectorAll('.role-select').forEach(select => {
+            membersList.querySelectorAll('.member-role-select').forEach(select => {
+                if (select.disabled) {
+                    return;
+                }
+
                 select.addEventListener('change', async (e) => {
                     const userId = e.target.dataset.userId;
                     const newRole = e.target.value;
                     await this.updateMemberRole(userId, newRole);
+                });
+            });
+
+            membersList.querySelectorAll('.member-remove-btn').forEach(button => {
+                if (button.disabled) {
+                    return;
+                }
+
+                button.addEventListener('click', (e) => {
+                    const userId = e.currentTarget.dataset.userId;
+                    this.removeMember(userId);
                 });
             });
 
@@ -734,6 +794,10 @@ class FamilyCalendar {
             return (a.name || '').localeCompare(b.name || '');
         });
 
+        const isAdminUser = this.currentUser?.role === 'admin';
+        const currentUserId = this.currentUser?.id;
+        const adminCount = members.filter((member) => member.role === 'admin').length;
+
         container.innerHTML = sorted.map((member) => {
             const roleColor = member.role === 'admin' ? '#2563eb'
                 : member.role === 'adult' ? '#2f855a'
@@ -742,19 +806,37 @@ class FamilyCalendar {
             const joinedAt = joinedAtRaw ? this.formatDateTime(joinedAtRaw) : null;
             const roleLabel = member.role ? member.role.charAt(0).toUpperCase() + member.role.slice(1) : 'Member';
             const familyId = member.familyId || member.family_id;
+            const familyName = member.familyName || member.family_name || null;
+            const isSelf = currentUserId && member.id === currentUserId;
+            const controlsEnabled = isAdminUser && !isSelf;
+            const isLastAdmin = member.role === 'admin' && adminCount <= 1;
+            const selectId = `member-role-${member.id}`;
+
+            const managementControls = controlsEnabled ? `
+                <div style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+                    <label for="${selectId}" style="font-size: 12px; color: #4a5568;">Role</label>
+                    <select id="${selectId}" class="member-role-select" data-user-id="${member.id}" ${isLastAdmin ? 'disabled' : ''} style="padding: 4px 8px; border-radius: 6px; border: 1px solid #cbd5f5;">
+                        <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
+                        <option value="adult" ${member.role === 'adult' ? 'selected' : ''}>Adult</option>
+                        <option value="child" ${member.role === 'child' ? 'selected' : ''}>Child</option>
+                    </select>
+                    <button class="danger-btn member-remove-btn" data-user-id="${member.id}" ${isLastAdmin ? 'disabled title="Family must have at least one admin"' : ''} style="padding: 4px 12px; font-size: 13px;">Remove</button>
+                </div>
+            ` : '';
 
             return `
                 <div style="padding: 14px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 10px; background: #fff;">
                     <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
                         <div>
                             <strong>${member.name || 'Unnamed Member'}</strong>
-                            <div style="color: #666; font-size: 13px;">${member.email || 'No email provided'}</div>
+                            <div style="color: #666; font-size: 13px; margin-top: 4px;">${member.email || 'No email provided'}</div>
+                            ${familyName ? `<div style="color: #4a5568; font-size: 12px; margin-top: 2px;">Family: ${familyName}</div>` : ''}
                         </div>
                         <div style="text-align: right;">
                             <span style="display: inline-block; padding: 4px 10px; border-radius: 9999px; background: ${roleColor}1A; color: ${roleColor}; font-size: 12px; font-weight: 600;">
                                 ${roleLabel}
                             </span>
-                            ${member.id === (this.currentUser && this.currentUser.id) ? '<div style="color: #2563eb; font-size: 12px; margin-top: 4px;">(You)</div>' : ''}
+                            ${isSelf ? '<div style="color: #2563eb; font-size: 12px; margin-top: 4px;">(You)</div>' : ''}
                         </div>
                     </div>
                     <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: #4a5568;">
@@ -762,9 +844,36 @@ class FamilyCalendar {
                         ${familyId ? `<span>Family ID: ${familyId}</span>` : ''}
                         ${joinedAt ? `<span>Joined: ${joinedAt}</span>` : ''}
                     </div>
+                    ${managementControls}
+                    ${controlsEnabled && isLastAdmin ? '<div style="margin-top: 6px; font-size: 12px; color: #c53030;">Cannot modify or remove the only admin.</div>' : ''}
                 </div>
             `;
         }).join('');
+
+        if (isAdminUser) {
+            container.querySelectorAll('.member-role-select').forEach((select) => {
+                if (select.disabled) {
+                    return;
+                }
+
+                select.addEventListener('change', (event) => {
+                    const userId = event.target.dataset.userId;
+                    const newRole = event.target.value;
+                    this.updateMemberRole(userId, newRole);
+                });
+            });
+
+            container.querySelectorAll('.member-remove-btn').forEach((button) => {
+                if (button.disabled) {
+                    return;
+                }
+
+                button.addEventListener('click', (event) => {
+                    const userId = event.currentTarget.dataset.userId;
+                    this.removeMember(userId);
+                });
+            });
+        }
     }
 
     async sendInvitation() {
@@ -866,6 +975,10 @@ class FamilyCalendar {
         document.getElementById('close-import-modal').addEventListener('click', () => this.hideModal('import-modal'));
         document.getElementById('close-details-modal').addEventListener('click', () => this.hideModal('event-details-modal'));
         document.getElementById('close-schedules-modal').addEventListener('click', () => this.hideModal('schedules-modal'));
+        const closeProfileModal = document.getElementById('close-profile-modal');
+        if (closeProfileModal) {
+            closeProfileModal.addEventListener('click', () => this.hideModal('profile-modal'));
+        }
         
         // Form buttons
         document.getElementById('cancel-btn').addEventListener('click', () => this.hideModal('event-modal'));
@@ -2110,6 +2223,7 @@ class FamilyCalendar {
     initKebabMenu() {
         const kebabBtn = document.getElementById('kebab-menu-btn');
         const kebabMenu = document.getElementById('kebab-menu');
+        const profileItem = document.getElementById('profile-menu-item');
         const schedulesItem = document.getElementById('schedules-menu-item');
         const exportItem = document.getElementById('export-menu-item');
         const settingsItem = document.getElementById('settings-menu-item');
@@ -2154,6 +2268,13 @@ class FamilyCalendar {
             });
         }
 
+        if (profileItem) {
+            profileItem.addEventListener('click', () => {
+                this.hideKebabMenu();
+                this.showProfileModal();
+            });
+        }
+
         if (exportItem) {
             exportItem.addEventListener('click', () => {
                 this.hideKebabMenu();
@@ -2192,6 +2313,71 @@ class FamilyCalendar {
 
     handleSchedulesClick() {
         this.showSchedulesModal();
+    }
+
+    showProfileModal() {
+        const modal = document.getElementById('profile-modal');
+        if (!modal) {
+            return;
+        }
+        this.renderProfileDetails();
+        modal.style.display = 'block';
+    }
+
+    renderProfileDetails() {
+        const container = document.getElementById('profile-details');
+        if (!container) {
+            return;
+        }
+
+        const user = this.currentUser || {};
+        const family = this.currentFamily || {};
+
+        const rows = [
+            ['Name', user.name || 'Not set'],
+            ['Email', user.email || 'Not set'],
+            ['Role', (user.role || 'Unknown').charAt(0).toUpperCase() + (user.role || 'Unknown').slice(1)],
+            ['Member ID', user.id || 'Unknown'],
+            ['Family Name', family.name || family.familyName || family.family_name || user.familyName || user.family_name || 'Unknown'],
+            ['Family ID', family.id || user.familyId || user.family_id || 'Unknown'],
+            ['Joined', user.created_at ? this.formatDateTime(user.created_at) : user.createdAt ? this.formatDateTime(user.createdAt) : 'Unknown']
+        ];
+
+        container.innerHTML = `
+            <div class="profile-section">
+                <h3>Account</h3>
+                ${rows.slice(0, 4).map(([label, value]) => `
+                    <div class="profile-row">
+                        <span>${label}</span>
+                        <span>${value}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="profile-section">
+                <h3>Family</h3>
+                ${rows.slice(4).map(([label, value]) => `
+                    <div class="profile-row">
+                        <span>${label}</span>
+                        <span>${value}</span>
+                    </div>
+                `).join('')}
+            </div>
+            ${this.currentUser?.role === 'admin' ? `
+                <div class="profile-section profile-actions">
+                    <button id="profile-family-admin-btn" class="secondary-btn" style="width: 100%;">Open Family Administration</button>
+                </div>
+            ` : ''}
+        `;
+
+        if (this.currentUser?.role === 'admin') {
+            const adminBtn = document.getElementById('profile-family-admin-btn');
+            if (adminBtn) {
+                adminBtn.addEventListener('click', () => {
+                    this.hideModal('profile-modal');
+                    this.showFamilyAdmin();
+                });
+            }
+        }
     }
 
     showSchedulesModal() {
