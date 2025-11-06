@@ -1,6 +1,6 @@
 {
   "name": "family-calendar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A family calendar web application with emoji support",
   "main": "server.js",
   "scripts": {
