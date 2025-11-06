@@ -169,6 +169,7 @@ class FamilyCalendar {
         const content = document.getElementById('event-details-content');
         
         const titleWithEmoji = event.emoji ? `${event.emoji} ${event.title}` : event.title;
+        const formattedTime = this.formatTimeForDisplay(event.time);
         
         content.innerHTML = `
             <div class="detail-item">
@@ -181,7 +182,7 @@ class FamilyCalendar {
             </div>
             <div class="detail-item">
                 <div class="detail-label">Time:</div>
-                <div class="detail-value">${event.time || 'All day'}</div>
+                <div class="detail-value">${formattedTime}</div>
             </div>
             <div class="detail-item">
                 <div class="detail-label">Description:</div>
@@ -480,6 +481,39 @@ class FamilyCalendar {
             day: 'numeric' 
         };
         return date.toLocaleDateString('en-US', options);
+    }
+
+    formatTimeForDisplay(timeString) {
+        if (!timeString) {
+            return 'All day';
+        }
+
+        const raw = String(timeString).trim();
+        if (!raw) {
+            return 'All day';
+        }
+
+        if (/(am|pm)$/i.test(raw)) {
+            return raw.toUpperCase();
+        }
+
+        const parts = raw.split(':');
+        if (parts.length < 2) {
+            return raw;
+        }
+
+        const hour = parseInt(parts[0], 10);
+        const minute = parseInt(parts[1], 10);
+
+        if (Number.isNaN(hour) || Number.isNaN(minute)) {
+            return raw;
+        }
+
+        const period = hour >= 12 ? 'PM' : 'AM';
+        const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+        const minuteStr = String(minute).padStart(2, '0');
+
+        return `${displayHour}:${minuteStr} ${period}`;
     }
 
     generateId() {
