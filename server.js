@@ -1014,8 +1014,16 @@ app.put('/api/events/:id', requireAuth, async (req, res) => {
             return res.status(404).json({ error: 'Event not found' });
         }
 
-        // Authorization: only owner or admin can edit
-        if (event.owner_id !== req.session.userId && req.session.userRole !== 'admin') {
+        const eventFamilyId = event.family_id || event.familyId || null;
+        const sessionFamilyId = req.session.familyId || null;
+        const normalizedEventFamilyId = eventFamilyId ? String(eventFamilyId).trim() : null;
+        const normalizedSessionFamilyId = sessionFamilyId ? String(sessionFamilyId).trim() : null;
+
+        if (!normalizedEventFamilyId || !normalizedSessionFamilyId || normalizedEventFamilyId !== normalizedSessionFamilyId) {
+            return res.status(403).json({ error: 'Not authorized to edit this event' });
+        }
+
+        if (event.visibility === 'private' && event.owner_id !== req.session.userId) {
             return res.status(403).json({ error: 'Not authorized to edit this event' });
         }
 
@@ -1044,8 +1052,16 @@ app.delete('/api/events/:id', requireAuth, async (req, res) => {
             return res.status(404).json({ error: 'Event not found' });
         }
 
-        // Authorization: only owner or admin can delete
-        if (event.owner_id !== req.session.userId && req.session.userRole !== 'admin') {
+        const eventFamilyId = event.family_id || event.familyId || null;
+        const sessionFamilyId = req.session.familyId || null;
+        const normalizedEventFamilyId = eventFamilyId ? String(eventFamilyId).trim() : null;
+        const normalizedSessionFamilyId = sessionFamilyId ? String(sessionFamilyId).trim() : null;
+
+        if (!normalizedEventFamilyId || !normalizedSessionFamilyId || normalizedEventFamilyId !== normalizedSessionFamilyId) {
+            return res.status(403).json({ error: 'Not authorized to delete this event' });
+        }
+
+        if (event.visibility === 'private' && event.owner_id !== req.session.userId) {
             return res.status(403).json({ error: 'Not authorized to delete this event' });
         }
 
