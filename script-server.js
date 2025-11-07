@@ -1704,6 +1704,8 @@ class FamilyCalendar {
         while (cursor <= endDate) {
             const currentDate = new Date(cursor);
             const dayEvents = this.getEventsForDay(currentDate);
+            const dateKey = this.formatDateForInput(currentDate);
+            const dayBackgroundImage = (this.dayBackgrounds && this.dayBackgrounds[dateKey]) || null;
 
             const dayCard = document.createElement('div');
             dayCard.className = 'list-day-card';
@@ -1719,11 +1721,12 @@ class FamilyCalendar {
             if (this.isSameDay(currentDate, today)) {
                 dayLabel.classList.add('today');
             }
-            dayLabel.textContent = currentDate.toLocaleDateString('en-US', {
+            const dayLabelText = currentDate.toLocaleDateString('en-US', {
                 weekday: 'long',
                 month: 'long',
                 day: 'numeric'
             });
+            dayLabel.textContent = dayLabelText;
 
             const count = document.createElement('div');
             count.className = 'list-day-count';
@@ -1731,6 +1734,24 @@ class FamilyCalendar {
 
             header.appendChild(dayLabel);
             header.appendChild(count);
+
+            if (dayBackgroundImage) {
+                dayCard.classList.add('with-background-image');
+                const backgroundWrapper = document.createElement('div');
+                backgroundWrapper.className = 'list-day-background';
+
+                const backgroundImg = document.createElement('img');
+                backgroundImg.src = dayBackgroundImage;
+                backgroundImg.alt = `${dayLabelText} background`;
+
+                const badge = document.createElement('span');
+                badge.className = 'list-day-background-label';
+                badge.textContent = 'Day background';
+
+                backgroundWrapper.appendChild(backgroundImg);
+                backgroundWrapper.appendChild(badge);
+                dayCard.appendChild(backgroundWrapper);
+            }
 
             const eventsWrapper = document.createElement('div');
             eventsWrapper.className = 'list-day-events';

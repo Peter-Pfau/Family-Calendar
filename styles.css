@@ -1006,11 +1006,44 @@ body {
     border-radius: 12px;
     box-shadow: 0 2px 6px rgba(13, 38, 76, 0.12);
     padding: 18px 24px;
+    position: relative;
+    overflow: hidden;
 }
 
 .list-day-card.today {
     border: 1px solid rgba(31, 122, 237, 0.35);
     box-shadow: 0 6px 16px rgba(31, 122, 237, 0.18);
+}
+
+.list-day-card.with-background-image {
+    padding-top: 0;
+}
+
+.list-day-background {
+    margin: -18px -24px 16px;
+    border-radius: 12px 12px 0 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.list-day-background img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    display: block;
+}
+
+.list-day-background-label {
+    position: absolute;
+    bottom: 12px;
+    right: 16px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #ffffff;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 999px;
 }
 
 .list-day-header {
@@ -1141,6 +1174,18 @@ body {
 
     .list-day-card {
         padding: 16px 18px;
+    }
+
+    .list-day-card.with-background-image {
+        padding-top: 0;
+    }
+
+    .list-day-background {
+        margin: -16px -18px 12px;
+    }
+
+    .list-day-background img {
+        height: 140px;
     }
 
     .list-day-event {
